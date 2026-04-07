@@ -77,7 +77,7 @@ final class DVTLocationStream: DVTStreaming, @unchecked Sendable {
         currentHost = host
         currentPort = port
         nextSequence = 1
-        stdoutBuffer = ""
+        resetBufferedOutput()
         setReady(false)
         try waitUntilReady(timeout: 8.0)
     }
@@ -111,7 +111,6 @@ final class DVTLocationStream: DVTStreaming, @unchecked Sendable {
         outPipe?.fileHandleForReading.readabilityHandler = nil
         errPipe?.fileHandleForReading.readabilityHandler = nil
         invalidateStreamState(resetProcess: true)
-        stdoutBuffer = ""
         nextSequence = 1
     }
 
@@ -138,15 +137,28 @@ final class DVTLocationStream: DVTStreaming, @unchecked Sendable {
     }
 
     private func handleStdoutChunk(_ chunk: String, onOutput: @escaping (String) -> Void) {
-        stdoutBuffer += chunk
+        var lines: [String] = []
+        var didBecomeReady = false
 
+        stateLock.lock()
+        stdoutBuffer += chunk
         while let nl = stdoutBuffer.firstIndex(of: "\n") {
             let line = String(stdoutBuffer[..<nl]).trimmingCharacters(in: .whitespacesAndNewlines)
             stdoutBuffer.removeSubrange(...nl)
             if line.isEmpty { continue }
             if line == "READY" {
-                setReady(true)
+                isReady = true
+                didBecomeReady = true
             }
+            lines.append(line)
+        }
+        stateLock.unlock()
+
+        if didBecomeReady {
+            onOutput("READY\n")
+            lines.removeAll { $0 == "READY" }
+        }
+        for line in lines {
             onOutput(line + "\n")
         }
     }
@@ -166,6 +178,7 @@ final class DVTLocationStream: DVTStreaming, @unchecked Sendable {
     private func invalidateStreamState(resetProcess: Bool = false) {
         stateLock.lock()
         isReady = false
+        stdoutBuffer = ""
         stateLock.unlock()
         inPipe = nil
         outPipe = nil
@@ -187,5 +200,11 @@ final class DVTLocationStream: DVTStreaming, @unchecked Sendable {
         stateLock.lock()
         defer { stateLock.unlock() }
         return isReady
+    }
+
+    private func resetBufferedOutput() {
+        stateLock.lock()
+        stdoutBuffer = ""
+        stateLock.unlock()
     }
 }

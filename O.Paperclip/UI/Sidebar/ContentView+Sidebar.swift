@@ -175,8 +175,9 @@ extension ContentView {
     func handlePurePointImport(_ result: Result<[URL], Error>) {
         switch result {
         case .success(let urls):
-            prepareImportedPurePointOverlays(from: urls)
+            beginImportedPurePointOverlaySession(with: urls)
         case .failure(let error):
+            resetPurePointImportSession()
             purePointImportError = error.localizedDescription
         }
     }
@@ -221,6 +222,7 @@ extension ContentView {
             renderNotice: purePointRenderNotice,
             hasVisiblePoints: !visiblePurePoints.isEmpty,
             onImport: {
+                resetPurePointImportSession()
                 purePointImportError = nil
                 isImportingPurePointKML = true
             },

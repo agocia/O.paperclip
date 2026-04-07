@@ -1,6 +1,8 @@
+import AppKit
+import Combine
+import Darwin
 import Foundation
 import MapKit
-import Combine
 
 
 
@@ -78,6 +80,247 @@ private final class LockedProcessOutput: @unchecked Sendable {
         return (
             String(data: stdout, encoding: .utf8) ?? "",
             String(data: stderr, encoding: .utf8) ?? ""
+        )
+    }
+}
+
+enum PrivilegedTunnelPIDParser {
+    static func parse(_ value: String) -> Int? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let pid = Int(trimmed), pid > 0 else { return nil }
+        return pid
+    }
+}
+
+enum DeviceLogRedactor {
+    private static let redactedEndpoint = "[RSD 已遮罩]"
+    private static let redactedHost = "[RSD_HOST]"
+    private static let redactedPort = "[RSD_PORT]"
+
+    static func maskedIdentifier(_ raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count > 8 else { return trimmed.isEmpty ? "[未提供]" : trimmed }
+        return "\(trimmed.prefix(4))...\(trimmed.suffix(4))"
+    }
+
+    static func maskedEndpoint(host: String, port: String) -> String {
+        guard !host.isEmpty, !port.isEmpty else { return redactedEndpoint }
+        return redactedEndpoint
+    }
+
+    static func sanitizedCommandString(_ args: [String]) -> String {
+        var result: [String] = []
+        var index = 0
+
+        while index < args.count {
+            let arg = args[index]
+
+            if arg == "--udid", index + 1 < args.count {
+                result.append(arg)
+                result.append(maskedIdentifier(args[index + 1]))
+                index += 2
+                continue
+            }
+
+            if arg == "--rsd", index + 2 < args.count {
+                result.append(arg)
+                result.append(redactedHost)
+                result.append(redactedPort)
+                index += 3
+                continue
+            }
+
+            if arg == "--", index + 2 < args.count,
+               let latitude = Double(args[index + 1]),
+               let longitude = Double(args[index + 2]),
+               looksLikeCoordinatePair(latitude: latitude, longitude: longitude) {
+                result.append(arg)
+                result.append(String(format: "%.4f", latitude))
+                result.append(String(format: "%.4f", longitude))
+                index += 3
+                continue
+            }
+
+            result.append(arg)
+            index += 1
+        }
+
+        return sanitizedMessage(result.joined(separator: " "))
+    }
+
+    static func sanitizedMessage(_ text: String) -> String {
+        var value = text
+        value = replaceMatches(
+            in: value,
+            pattern: #"(UDID\s*)([A-Fa-f0-9-]{8,})"#,
+            options: [.caseInsensitive]
+        ) { match, source in
+            let prefix = source.substring(with: match.range(at: 1))
+            let identifier = source.substring(with: match.range(at: 2))
+            return prefix + maskedIdentifier(identifier)
+        }
+        value = replaceMatches(
+            in: value,
+            pattern: #"--udid\s+([^\s]+)"#
+        ) { match, source in
+            "--udid \(maskedIdentifier(source.substring(with: match.range(at: 1))))"
+        }
+        value = replaceMatches(
+            in: value,
+            pattern: #"--rsd\s+([^\s]+)\s+(\d+)"#
+        ) { _, _ in
+            "--rsd \(redactedHost) \(redactedPort)"
+        }
+        value = replaceMatches(
+            in: value,
+            pattern: #"((?:RSD|rsd)[^\n:：]*[:：]\s*)([^\s]+):(\d+)"#
+        ) { match, source in
+            let prefix = source.substring(with: match.range(at: 1))
+            return prefix + redactedEndpoint
+        }
+        value = replaceMatches(
+            in: value,
+            pattern: #"(Wi[‑-]?Fi:\s*)([^\)\s]+)"#
+        ) { match, source in
+            let prefix = source.substring(with: match.range(at: 1))
+            let identifier = source.substring(with: match.range(at: 2))
+            return prefix + maskedIdentifier(identifier)
+        }
+        value = replaceMatches(
+            in: value,
+            pattern: #"((?:localhost|(?:\d{1,3}\.){3}\d{1,3}|[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+)):(\d{2,5})"#
+        ) { _, _ in
+            redactedEndpoint
+        }
+        value = replaceMatches(
+            in: value,
+            pattern: #"(-?\d{1,3}\.\d{4,})\s*,\s*(-?\d{1,3}\.\d{4,})"#
+        ) { match, source in
+            let latitude = Double(source.substring(with: match.range(at: 1)))
+            let longitude = Double(source.substring(with: match.range(at: 2)))
+            guard let latitude, let longitude,
+                  looksLikeCoordinatePair(latitude: latitude, longitude: longitude) else {
+                return source.substring(with: match.range)
+            }
+            return String(format: "%.4f, %.4f", latitude, longitude)
+        }
+        value = replaceMatches(
+            in: value,
+            pattern: #"--\s+(-?\d{1,3}\.\d{4,})\s+(-?\d{1,3}\.\d{4,})"#
+        ) { match, source in
+            let latitude = Double(source.substring(with: match.range(at: 1)))
+            let longitude = Double(source.substring(with: match.range(at: 2)))
+            guard let latitude, let longitude,
+                  looksLikeCoordinatePair(latitude: latitude, longitude: longitude) else {
+                return source.substring(with: match.range)
+            }
+            return String(format: "-- %.4f %.4f", latitude, longitude)
+        }
+        value = replaceMatches(
+            in: value,
+            pattern: #"(lat(?:itude)?=)(-?\d{1,3}\.\d{4,})"#,
+            options: [.caseInsensitive]
+        ) { match, source in
+            let prefix = source.substring(with: match.range(at: 1))
+            let value = Double(source.substring(with: match.range(at: 2))) ?? 0
+            return prefix + String(format: "%.4f", value)
+        }
+        value = replaceMatches(
+            in: value,
+            pattern: #"(lon(?:gitude)?=)(-?\d{1,3}\.\d{4,})"#,
+            options: [.caseInsensitive]
+        ) { match, source in
+            let prefix = source.substring(with: match.range(at: 1))
+            let value = Double(source.substring(with: match.range(at: 2))) ?? 0
+            return prefix + String(format: "%.4f", value)
+        }
+        return value
+    }
+
+    private static func looksLikeCoordinatePair(latitude: Double, longitude: Double) -> Bool {
+        abs(latitude) <= 90 && abs(longitude) <= 180
+    }
+
+    private static func replaceMatches(
+        in text: String,
+        pattern: String,
+        options: NSRegularExpression.Options = [],
+        replacement: (NSTextCheckingResult, NSString) -> String
+    ) -> String {
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: options) else {
+            return text
+        }
+        let source = text as NSString
+        let matches = regex.matches(in: text, range: NSRange(location: 0, length: source.length))
+        guard !matches.isEmpty else { return text }
+
+        let mutable = NSMutableString(string: text)
+        for match in matches.reversed() {
+            mutable.replaceCharacters(in: match.range, with: replacement(match, source))
+        }
+        return mutable as String
+    }
+}
+
+final class RotatingRuntimeLogStore: @unchecked Sendable {
+    let logURL: URL
+    let backupURL: URL
+    let maxBytes: UInt64
+    private let fileManager: FileManager
+
+    init(logURL: URL, maxBytes: UInt64 = 256 * 1024, fileManager: FileManager = .default) {
+        self.logURL = logURL
+        self.backupURL = logURL.deletingLastPathComponent().appendingPathComponent(logURL.lastPathComponent + ".1")
+        self.maxBytes = maxBytes
+        self.fileManager = fileManager
+    }
+
+    func appendLine(_ line: String) {
+        guard let data = (line + "\n").data(using: .utf8) else { return }
+        rotateIfNeeded(incomingBytes: UInt64(data.count))
+
+        if !fileManager.fileExists(atPath: logURL.path) {
+            fileManager.createFile(atPath: logURL.path, contents: data)
+            return
+        }
+
+        do {
+            let handle = try FileHandle(forWritingTo: logURL)
+            try handle.seekToEnd()
+            try handle.write(contentsOf: data)
+            try handle.close()
+        } catch {
+            try? (line + "\n").write(to: logURL, atomically: true, encoding: .utf8)
+        }
+    }
+
+    private func rotateIfNeeded(incomingBytes: UInt64) {
+        let currentSize = (try? fileManager.attributesOfItem(atPath: logURL.path)[.size] as? NSNumber)?.uint64Value ?? 0
+        guard currentSize + incomingBytes > maxBytes else { return }
+
+        try? fileManager.removeItem(at: backupURL)
+        if fileManager.fileExists(atPath: logURL.path) {
+            try? fileManager.moveItem(at: logURL, to: backupURL)
+        }
+    }
+}
+
+private struct PrivilegedTunnelFiles {
+    let directoryURL: URL
+    let logURL: URL
+    let pidURL: URL
+    let stopURL: URL
+    let scriptURL: URL
+
+    static func makeDefault() -> Self {
+        let directoryURL = DiagnosticsPaths.directoryURL(named: "PrivilegedTunnel")
+        try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directoryURL.path)
+        return PrivilegedTunnelFiles(
+            directoryURL: directoryURL,
+            logURL: directoryURL.appendingPathComponent("opaperclip_tunnel.log"),
+            pidURL: directoryURL.appendingPathComponent("opaperclip_tunnel.pid"),
+            stopURL: directoryURL.appendingPathComponent("opaperclip_tunnel.stop"),
+            scriptURL: directoryURL.appendingPathComponent("opaperclip_tunnel_wrapper.sh")
         )
     }
 }
@@ -237,10 +480,8 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
     private var expectedDvtStreamExit = false
     private var sentLocationCount: Int = 0
     private var activeTunnelConnectionType: TunnelConnectionType?
-    private let privilegedTunnelLog = "/tmp/opaperclip_tunnel.log"
-    private let privilegedTunnelPid = "/tmp/opaperclip_tunnel.pid"
-    private let privilegedTunnelStop = "/tmp/opaperclip_tunnel.stop"
-    private let runtimeLog = DiagnosticsPaths.logFileURL(named: "device-runtime.log").path
+    private let privilegedTunnelFiles = PrivilegedTunnelFiles.makeDefault()
+    private let runtimeLogStore = RotatingRuntimeLogStore(logURL: DiagnosticsPaths.logFileURL(named: "device-runtime.log"))
     private let runtimeLogQueue = DispatchQueue(label: "paperclip.runtime.log", qos: .utility)
     private static let manualRsdHostKey = "paperclip.connection.manualRsdHost"
     private static let manualRsdPortKey = "paperclip.connection.manualRsdPort"
@@ -362,9 +603,9 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
                 let deviceLabel = self.connectedDeviceLabel(using: cmd)
 
                 self.setConnectionState(.connected, deviceName: "\(deviceLabel) (RSD: \(ep.host):\(ep.port))", lastError: nil)
-                DispatchQueue.main.async {
-                    print("✅ Tunnel OK: \(ep.host):\(ep.port)")
-                }
+#if DEBUG
+                print("✅ Tunnel OK: \(DeviceLogRedactor.maskedEndpoint(host: ep.host, port: ep.port))")
+#endif
                 self.appendLog("連線完成，模式：\(self.simulateLocationMode?.rawValue ?? "unknown")")
                 self.cancelAutoReconnect()
                 self.reconnectAttempt = 0
@@ -372,9 +613,9 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
                 self.stopTunnel()
                 let lowered = error.localizedDescription.lowercased()
                 self.setConnectionState(.failed, deviceName: "連線失敗", lastError: error.localizedDescription)
-                DispatchQueue.main.async {
-                    print("❌ connectDevice error: \(error.localizedDescription)")
-                }
+#if DEBUG
+                print("❌ connectDevice error: \(DeviceLogRedactor.sanitizedMessage(error.localizedDescription))")
+#endif
                 self.appendLog("連線失敗：\(error.localizedDescription)")
                 if autoTriggered || lowered.contains("bad file descriptor") {
                     self.scheduleAutoReconnect(reason: error.localizedDescription)
@@ -598,7 +839,7 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
         let name = device.deviceName ?? device.productType ?? device.deviceClass ?? "Apple Device"
         let transport = device.connectionType?.uppercased() ?? "UNKNOWN"
         let identifier = device.identifier ?? device.uniqueDeviceID ?? "no-id"
-        return "\(name) [\(transport)] \(identifier)"
+        return "\(name) [\(transport)] \(DeviceLogRedactor.maskedIdentifier(identifier))"
     }
 
     private func resolveConnectedDeviceLabel(using cmd: [String], preferredUDID: String?) throws -> String {
@@ -627,7 +868,7 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
     private func connectedDeviceLabel(using cmd: [String]) -> String {
         if effectiveTunnelConnectionType == .wifi {
             if let requested = effectiveTunnelUDID {
-                return "Apple Device (Wi‑Fi: \(requested))"
+                return "Apple Device (Wi‑Fi: \(DeviceLogRedactor.maskedIdentifier(requested)))"
             }
             return "Apple Device (Wi‑Fi)"
         }
@@ -670,41 +911,20 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
     private func startTunnelWithAdminPrompt(using cmd: [String], udid: String?, transport: TunnelTransport) throws {
         setStage("請求系統授權")
         let full = cmd + startTunnelArguments(transport: transport, udid: udid)
-        let cmdLine = full.map { shellEscape($0) }.joined(separator: " ")
-
-        let wrapperScript = """
-        LOG=\(shellEscape(privilegedTunnelLog))
-        PIDFILE=\(shellEscape(privilegedTunnelPid))
-        STOPFILE=\(shellEscape(privilegedTunnelStop))
-        rm -f "$STOPFILE"
-        : > "$LOG"
-        \(cmdLine) >> "$LOG" 2>&1 &
-        CHILD=$!
-        echo $CHILD > "$PIDFILE"
-        while kill -0 "$CHILD" >/dev/null 2>&1; do
-          if [ -f "$STOPFILE" ]; then
-            kill "$CHILD" >/dev/null 2>&1 || true
-            break
-          fi
-          sleep 1
-        done
-        wait "$CHILD" >/dev/null 2>&1 || true
-        rm -f "$PIDFILE" "$STOPFILE"
-        """
-        let shellCmd = "/bin/sh -c " + shellEscape(wrapperScript) + " >/dev/null 2>&1 &"
+        let scriptURL = try preparePrivilegedTunnelWrapperScript(for: full)
+        let shellCmd = privilegedTunnelLaunchCommand(for: scriptURL)
 
         if runWithNonInteractiveSudo(shellCmd) {
             appendLog("以 sudo -n 啟動管理員 tunnel")
         } else {
-            let apple = "do shell script " + "\"" + shellEscapeForAppleScript(shellCmd) + "\" with administrator privileges"
-            _ = try run(["/usr/bin/osascript", "-e", apple])
+            try runPrivilegedTunnelWithAuthorization(scriptURL: scriptURL)
             appendLog("以系統授權視窗啟動管理員 tunnel (\(transport.rawValue))")
         }
         appendLog("管理員 tunnel 已啟動，等待 RSD 位址 (\(transport.rawValue))")
 
         let deadline = Date().addingTimeInterval(AppConstants.Timeouts.tunnelReady)
         while Date() < deadline {
-            if let text = try? String(contentsOfFile: privilegedTunnelLog, encoding: .utf8) {
+            if let text = try? String(contentsOf: privilegedTunnelFiles.logURL, encoding: .utf8) {
                 if let pair = TunnelOutputParser.endpoint(in: text) {
                     rsdEndpoint = Endpoint(host: pair.host, port: pair.port)
                     let ep = rsdEndpoint!
@@ -713,14 +933,15 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
                 }
                 if let failure = TunnelOutputParser.immediateFailure(in: text) {
                     throw NSError(domain: "DeviceManager", code: -1, userInfo: [
-                        NSLocalizedDescriptionKey: failure
+                        NSLocalizedDescriptionKey: DeviceLogRedactor.sanitizedMessage(failure)
                     ])
                 }
             }
             Thread.sleep(forTimeInterval: AppConstants.Timeouts.pollInterval)
         }
 
-        let logText = (try? String(contentsOfFile: privilegedTunnelLog, encoding: .utf8)) ?? ""
+        let logText = (try? String(contentsOf: privilegedTunnelFiles.logURL, encoding: .utf8))
+            .map(DeviceLogRedactor.sanitizedMessage) ?? ""
         throw NSError(domain: "DeviceManager", code: -1, userInfo: [
             NSLocalizedDescriptionKey: "已要求管理員權限，但仍未拿到 RSD 位址。\n\(logText)"
         ])
@@ -740,31 +961,129 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
         return "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
-    private func shellEscapeForAppleScript(_ s: String) -> String {
-        s.replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"")
+    private func ensurePrivilegedTunnelDirectory() {
+        let fileManager = FileManager.default
+        try? fileManager.createDirectory(
+            at: privilegedTunnelFiles.directoryURL,
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
+        )
+        try? fileManager.setAttributes(
+            [.posixPermissions: 0o700],
+            ofItemAtPath: privilegedTunnelFiles.directoryURL.path
+        )
+    }
+
+    private func cleanupPrivilegedTunnelArtifacts(removeScript: Bool = false) {
+        let urls = [
+            privilegedTunnelFiles.logURL,
+            privilegedTunnelFiles.pidURL,
+            privilegedTunnelFiles.stopURL
+        ] + (removeScript ? [privilegedTunnelFiles.scriptURL] : [])
+
+        for url in urls {
+            try? FileManager.default.removeItem(at: url)
+        }
+    }
+
+    private func preparePrivilegedTunnelWrapperScript(for command: [String]) throws -> URL {
+        ensurePrivilegedTunnelDirectory()
+        cleanupPrivilegedTunnelArtifacts(removeScript: false)
+
+        let commandLine = command.map(shellEscape).joined(separator: " ")
+        let script = """
+        #!/bin/sh
+        umask 077
+        LOG=\(shellEscape(privilegedTunnelFiles.logURL.path))
+        PIDFILE=\(shellEscape(privilegedTunnelFiles.pidURL.path))
+        STOPFILE=\(shellEscape(privilegedTunnelFiles.stopURL.path))
+        rm -f "$STOPFILE"
+        : > "$LOG"
+        \(commandLine) >> "$LOG" 2>&1 &
+        CHILD=$!
+        echo "$CHILD" > "$PIDFILE"
+        while kill -0 "$CHILD" >/dev/null 2>&1; do
+          if [ -f "$STOPFILE" ]; then
+            kill "$CHILD" >/dev/null 2>&1 || true
+            break
+          fi
+          sleep 1
+        done
+        wait "$CHILD" >/dev/null 2>&1 || true
+        rm -f "$PIDFILE" "$STOPFILE"
+        """
+
+        try script.write(to: privilegedTunnelFiles.scriptURL, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o700],
+            ofItemAtPath: privilegedTunnelFiles.scriptURL.path
+        )
+        return privilegedTunnelFiles.scriptURL
+    }
+
+    private func privilegedTunnelLaunchCommand(for scriptURL: URL) -> String {
+        "/bin/sh " + shellEscape(scriptURL.path) + " >/dev/null 2>&1 &"
+    }
+
+    private func runPrivilegedTunnelWithAuthorization(scriptURL: URL) throws {
+        let source = """
+        on run argv
+            do shell script "/bin/sh " & quoted form of item 1 of argv & " >/dev/null 2>&1 &" with administrator privileges
+        end run
+        """
+        _ = try run(["/usr/bin/osascript", "-e", source, scriptURL.path])
+    }
+
+    private func loadPrivilegedTunnelPID() -> Int? {
+        guard let raw = try? String(contentsOf: privilegedTunnelFiles.pidURL, encoding: .utf8) else {
+            return nil
+        }
+        guard let pid = PrivilegedTunnelPIDParser.parse(raw) else {
+            appendLog("管理員 tunnel PID 檔內容無效，將僅使用 stop file 結束")
+            return nil
+        }
+        return pid
+    }
+
+    private func requestPrivilegedTunnelStop() throws {
+        ensurePrivilegedTunnelDirectory()
+        try Data().write(to: privilegedTunnelFiles.stopURL, options: .atomic)
+        try? FileManager.default.setAttributes(
+            [.posixPermissions: 0o600],
+            ofItemAtPath: privilegedTunnelFiles.stopURL.path
+        )
+    }
+
+    private func isProcessRunning(pid: Int) -> Bool {
+        if kill(pid_t(pid), 0) == 0 {
+            return true
+        }
+        return errno == EPERM
     }
 
     private func stopPrivilegedTunnelProcessIfNeeded() {
-        if let pidStr = try? String(contentsOfFile: privilegedTunnelPid, encoding: .utf8)
-            .trimmingCharacters(in: .whitespacesAndNewlines),
-           !pidStr.isEmpty {
-            let cmd = "if [ -f \(shellEscape(privilegedTunnelPid)) ]; then kill \(pidStr) >/dev/null 2>&1 || true; rm -f \(shellEscape(privilegedTunnelPid)) \(shellEscape(privilegedTunnelStop)); fi"
-            if !runWithNonInteractiveSudo(cmd) {
-                appendLog("sudo -n 無法停止管理員 tunnel，改用 stop file 通知結束")
-                do {
-                    try Data().write(to: URL(fileURLWithPath: privilegedTunnelStop), options: .atomic)
-                    let deadline = Date().addingTimeInterval(2.0)
-                    while Date() < deadline {
-                        if !FileManager.default.fileExists(atPath: privilegedTunnelPid) {
-                            break
-                        }
-                        Thread.sleep(forTimeInterval: AppConstants.Timeouts.pollInterval)
-                    }
-                } catch {
-                    appendLog("寫入 stop file 失敗：\(error.localizedDescription)")
+        let fileManager = FileManager.default
+        guard fileManager.fileExists(atPath: privilegedTunnelFiles.pidURL.path)
+                || fileManager.fileExists(atPath: privilegedTunnelFiles.scriptURL.path)
+                || fileManager.fileExists(atPath: privilegedTunnelFiles.logURL.path) else {
+            return
+        }
+
+        let pid = loadPrivilegedTunnelPID()
+        do {
+            try requestPrivilegedTunnelStop()
+            let deadline = Date().addingTimeInterval(2.0)
+            while Date() < deadline {
+                if !fileManager.fileExists(atPath: privilegedTunnelFiles.pidURL.path) {
+                    break
                 }
+                if let pid, !isProcessRunning(pid: pid) {
+                    break
+                }
+                Thread.sleep(forTimeInterval: AppConstants.Timeouts.pollInterval)
             }
+        } catch {
+            appendLog("寫入 stop file 失敗：\(error.localizedDescription)")
         }
     }
 
@@ -872,9 +1191,13 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
                     timeout: AppConstants.Timeouts.rsdInfo,
                     step: "清除模擬定位"
                 )
+#if DEBUG
                 print("🧹 已清除模擬定位")
+#endif
             } catch {
-                print("⚠️ 清除失敗: \(error.localizedDescription)")
+#if DEBUG
+                print("⚠️ 清除失敗: \(DeviceLogRedactor.sanitizedMessage(error.localizedDescription))")
+#endif
                 self.appendLog("清除模擬定位失敗：\(error.localizedDescription)")
             }
         }
@@ -938,10 +1261,12 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
             }
         } catch {
             let msg = error.localizedDescription
-            print("❌ 發送失敗: \(msg)")
+#if DEBUG
+            print("❌ 發送失敗: \(DeviceLogRedactor.sanitizedMessage(msg))")
+#endif
             appendLog("送出定位失敗：\(msg)")
             DispatchQueue.main.async {
-                self.lastError = "發送定位失敗：\(msg)"
+                self.lastError = DeviceLogRedactor.sanitizedMessage("發送定位失敗：\(msg)")
             }
             if msg.lowercased().contains("timeout") || msg.lowercased().contains("broken pipe") || msg.lowercased().contains("connection") {
                 setConnectionState(.failed, deviceName: "Tunnel 中斷，請重連", lastError: msg)
@@ -1050,7 +1375,7 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
                 out.fileHandleForReading.readabilityHandler = nil
                 err.fileHandleForReading.readabilityHandler = nil
                 throw NSError(domain: "DeviceManager", code: -1, userInfo: [
-                    NSLocalizedDescriptionKey: failure
+                    NSLocalizedDescriptionKey: DeviceLogRedactor.sanitizedMessage(failure)
                 ])
             }
 
@@ -1067,7 +1392,7 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
         appendLog("tunnel 未返回 RSD 位址 (\(transport.rawValue))")
 
         throw NSError(domain: "DeviceManager", code: -1, userInfo: [
-            NSLocalizedDescriptionKey: "start-tunnel 逾時或未輸出 RSD 位址。\n\(finalText)"
+            NSLocalizedDescriptionKey: "start-tunnel 逾時或未輸出 RSD 位址。\n\(DeviceLogRedactor.sanitizedMessage(finalText))"
         ])
     }
 
@@ -1101,6 +1426,13 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
         simulateLocationMode = nil
         activeTunnelConnectionType = nil
         stopSendPipelineSynchronously()
+
+        tunnelOutPipe?.fileHandleForReading.readabilityHandler = nil
+        tunnelErrPipe?.fileHandleForReading.readabilityHandler = nil
+
+        if let p = tunnelProcess {
+            p.terminationHandler = nil
+        }
 
         if let p = tunnelProcess, p.isRunning {
             p.terminate()
@@ -1174,40 +1506,27 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
             if let deviceName {
                 self.deviceName = deviceName
             }
-            self.lastError = lastError
+            self.lastError = lastError.map(DeviceLogRedactor.sanitizedMessage)
         }
     }
 
     private func appendLog(_ text: String) {
         let stamp = Self.logFormatter.string(from: Date())
-        let line = "[\(stamp)] \(text)"
+        let line = "[\(stamp)] \(DeviceLogRedactor.sanitizedMessage(text))"
         DispatchQueue.main.async {
             self.debugLog.append(line)
             if self.debugLog.count > 120 {
                 self.debugLog.removeFirst(self.debugLog.count - 120)
             }
         }
-        runtimeLogQueue.async { [runtimeLog] in
-            guard let data = (line + "\n").data(using: .utf8) else { return }
-            let fm = FileManager.default
-            if !fm.fileExists(atPath: runtimeLog) {
-                fm.createFile(atPath: runtimeLog, contents: data)
-                return
-            }
-            do {
-                let fh = try FileHandle(forWritingTo: URL(fileURLWithPath: runtimeLog))
-                try fh.seekToEnd()
-                try fh.write(contentsOf: data)
-                try fh.close()
-            } catch {
-                // Avoid recursive logging here.
-            }
+        runtimeLogQueue.async { [runtimeLogStore] in
+            runtimeLogStore.appendLine(line)
         }
     }
 
     private func runWithTimeoutLogged(_ args: [String], timeout: TimeInterval, step: String) throws -> String {
         appendLog("▶ \(step)")
-        appendLog("cmd: \(args.joined(separator: " "))")
+        appendLog("cmd: \(DeviceLogRedactor.sanitizedCommandString(args))")
         do {
             let out = try runWithTimeout(args, timeout: timeout)
             let trimmed = summarizeOutput(out)
@@ -1223,12 +1542,14 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
     }
 
     private func summarizeOutput(_ text: String, maxChars: Int = 260) -> String {
-        let cleaned = text
+        let cleaned = DeviceLogRedactor.sanitizedMessage(
+            text
             .replacingOccurrences(of: "\r", with: "\n")
             .components(separatedBy: .newlines)
             .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
             .prefix(3)
             .joined(separator: " | ")
+        )
         if cleaned.count <= maxChars { return cleaned }
         return String(cleaned.prefix(maxChars)) + "..."
     }
@@ -1341,7 +1662,7 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
                     .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
                     .first(where: { !$0.isEmpty }) ?? "無額外輸出"
                 throw NSError(domain: "DeviceManager", code: -1, userInfo: [
-                    NSLocalizedDescriptionKey: "command timed out: \(args.joined(separator: " ")) | \(details)"
+                    NSLocalizedDescriptionKey: "command timed out: \(DeviceLogRedactor.sanitizedCommandString(args)) | \(DeviceLogRedactor.sanitizedMessage(details))"
                 ])
             }
         } else {
@@ -1362,7 +1683,7 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
                 .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
                 .first(where: { !$0.isEmpty }) ?? "Command failed"
             throw NSError(domain: "DeviceManager", code: Int(p.terminationStatus), userInfo: [
-                NSLocalizedDescriptionKey: details
+                NSLocalizedDescriptionKey: DeviceLogRedactor.sanitizedMessage(details)
             ])
         }
 

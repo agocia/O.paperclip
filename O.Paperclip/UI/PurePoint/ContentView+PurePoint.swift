@@ -129,17 +129,42 @@ extension ContentView {
         ImportedPurePointOverlayStore.saveTitleOverrides(titles)
     }
 
+    func beginImportedPurePointOverlaySession(with urls: [URL]) {
+        guard !urls.isEmpty else { return }
+        resetPurePointImportSession()
+        purePointImportError = nil
+        pendingImportedOverlaySourceURLs = urls
+        prepareImportedPurePointOverlays(from: urls)
+    }
+
     func prepareImportedPurePointOverlays(from urls: [URL]) {
         guard !urls.isEmpty else { return }
         do {
-            let overlays = try ImportedPurePointOverlayStore.previewOverlays(from: urls)
+            let overlays = try ImportedPurePointOverlayStore.previewOverlays(
+                from: urls,
+                approvedRemoteURLs: approvedPurePointRemoteURLs
+            )
             purePointImportError = nil
+            pendingPurePointRemoteApprovalURLs = []
+            isShowingPurePointRemoteApprovalSheet = false
             pendingImportedOverlays = overlays
             pendingImportedOverlayTitles = Dictionary(
                 uniqueKeysWithValues: overlays.map { ($0.id, $0.title) }
             )
             isShowingImportedOverlayNamingSheet = true
+        } catch let error as PurePointImportError {
+            switch error {
+            case .remoteLinkRequiresApproval(let remoteURLs):
+                purePointImportError = nil
+                pendingPurePointRemoteApprovalURLs = remoteURLs
+                isShowingImportedOverlayNamingSheet = false
+                isShowingPurePointRemoteApprovalSheet = true
+            default:
+                resetPurePointImportSession()
+                purePointImportError = error.localizedDescription
+            }
         } catch {
+            resetPurePointImportSession()
             purePointImportError = error.localizedDescription
         }
     }
@@ -149,21 +174,52 @@ extension ContentView {
             let renamedOverlays = pendingImportedOverlays.map { overlay in
                 overlay.renamed(to: pendingImportedOverlayTitles[overlay.id] ?? overlay.title)
             }
-            let persistedOverlays = try ImportedPurePointOverlayStore.persistImportedOverlays(renamedOverlays)
+            let persistedOverlays = try ImportedPurePointOverlayStore.persistImportedOverlays(
+                renamedOverlays,
+                approvedRemoteURLs: approvedPurePointRemoteURLs
+            )
             commitImportedPurePointOverlays(persistedOverlays)
             purePointImportError = nil
-            pendingImportedOverlays = []
-            pendingImportedOverlayTitles = [:]
-            isShowingImportedOverlayNamingSheet = false
+            resetPurePointImportSession()
+        } catch let error as PurePointImportError {
+            switch error {
+            case .remoteLinkRequiresApproval(let remoteURLs):
+                purePointImportError = nil
+                pendingPurePointRemoteApprovalURLs = remoteURLs
+                isShowingImportedOverlayNamingSheet = false
+                isShowingPurePointRemoteApprovalSheet = true
+            default:
+                purePointImportError = error.localizedDescription
+            }
         } catch {
             purePointImportError = error.localizedDescription
         }
     }
 
     func cancelImportedPurePointOverlays() {
+        resetPurePointImportSession()
+    }
+
+    func approvePendingPurePointRemoteLinks() {
+        let approved = pendingPurePointRemoteApprovalURLs.map(PurePointKMLResolver.normalizedRemoteURL)
+        approvedPurePointRemoteURLs.formUnion(approved)
+        pendingPurePointRemoteApprovalURLs = []
+        isShowingPurePointRemoteApprovalSheet = false
+        prepareImportedPurePointOverlays(from: pendingImportedOverlaySourceURLs)
+    }
+
+    func cancelPendingPurePointRemoteLinks() {
+        resetPurePointImportSession()
+    }
+
+    func resetPurePointImportSession() {
         pendingImportedOverlays = []
         pendingImportedOverlayTitles = [:]
+        pendingImportedOverlaySourceURLs = []
+        pendingPurePointRemoteApprovalURLs = []
+        approvedPurePointRemoteURLs = []
         isShowingImportedOverlayNamingSheet = false
+        isShowingPurePointRemoteApprovalSheet = false
     }
 
     func commitImportedPurePointOverlays(_ overlays: [PurePointOverlay]) {
@@ -200,5 +256,48 @@ extension ContentView {
             onCancel: cancelImportedPurePointOverlays,
             onImport: finalizeImportedPurePointOverlays
         )
+    }
+
+    @ViewBuilder
+    var remoteLinkApprovalSheet: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("需要確認遠端 KML")
+                .font(.title3)
+                .fontWeight(.semibold)
+
+            Text("這批匯入檔案包含 NetworkLink。確認後才會抓取下列網址的內容，本次只在目前匯入流程有效。")
+                .foregroundColor(.secondary)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 10) {
+                    ForEach(pendingPurePointRemoteApprovalURLs, id: \.absoluteString) { url in
+                        Text(url.absoluteString)
+                            .font(.system(.body, design: .monospaced))
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(10)
+                            .background(Color.white.opacity(0.06))
+                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    }
+                }
+            }
+            .frame(minHeight: 120, maxHeight: 260)
+
+            HStack(spacing: 10) {
+                Spacer()
+                Button("取消") {
+                    cancelPendingPurePointRemoteLinks()
+                }
+                .buttonStyle(.bordered)
+
+                Button("確認下載") {
+                    approvePendingPurePointRemoteLinks()
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(ModernTheme.accent)
+            }
+        }
+        .padding(24)
+        .frame(width: 560)
     }
 }

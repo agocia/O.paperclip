@@ -17,12 +17,29 @@ private final class UnsafeSendableBox<T>: @unchecked Sendable {
     }
 }
 
+protocol RouteCalculating {
+    func calculate(
+        request: MKDirections.Request,
+        completion: @escaping (MKDirections.Response?, (any Error)?) -> Void
+    )
+}
+
+struct MKDirectionsRouteCalculator: RouteCalculating {
+    func calculate(
+        request: MKDirections.Request,
+        completion: @escaping (MKDirections.Response?, (any Error)?) -> Void
+    ) {
+        MKDirections(request: request).calculate(completionHandler: completion)
+    }
+}
+
 @MainActor
 @Observable
 final class AppViewModel {
     // MARK: - Dependencies
     let deviceManager: any DeviceControlling
     let locationSearchService: any LocationSearching
+    let routeCalculator: any RouteCalculating
 
     // MARK: - Draft workflow
     var appState: AppState = .selectingA
@@ -235,9 +252,14 @@ final class AppViewModel {
         !deviceManager.isConnected || !hasActiveRouteSnapshot
     }
 
-    init(deviceManager: any DeviceControlling, locationSearchService: any LocationSearching) {
+    init(
+        deviceManager: any DeviceControlling,
+        locationSearchService: any LocationSearching,
+        routeCalculator: any RouteCalculating = MKDirectionsRouteCalculator()
+    ) {
         self.deviceManager = deviceManager
         self.locationSearchService = locationSearchService
+        self.routeCalculator = routeCalculator
 
         deviceManager.objectWillChange
             .receive(on: RunLoop.main)
@@ -511,21 +533,26 @@ final class AppViewModel {
     func calculateRoutes() {
         guard operationMode == .routeAB, let a = pointA, let b = pointB else { return }
         clearDraftGeometry()
+        locationInputError = nil
         let request = MKDirections.Request()
         request.source = MKMapItem(placemark: MKPlacemark(coordinate: a))
         request.destination = MKMapItem(placemark: MKPlacemark(coordinate: b))
         request.transportType = .walking
         request.requestsAlternateRoutes = true
 
-        MKDirections(request: request).calculate { response, _ in
+        routeCalculator.calculate(request: request) { response, error in
             let routesBox = UnsafeSendableBox(response?.routes)
+            let errorBox = UnsafeSendableBox(error)
             MainActor.assumeIsolated {
                 if let routes = routesBox.value {
                     self.routes = routes
                     self.customRoutePolyline = nil
                     self.selectedRouteIndex = 0
+                    self.locationInputError = nil
                     self.appState = .routeSelection
                 } else {
+                    self.clearDraftGeometry()
+                    self.locationInputError = self.routeABFailureMessage(for: errorBox.value)
                     self.appState = .selectingB
                 }
             }
@@ -561,6 +588,7 @@ final class AppViewModel {
         routes = []
         selectedRouteIndex = 0
         clearDraftGeometry()
+        locationInputError = nil
 
         let routeWaypoints: [CLLocationCoordinate2D]
         if isClosedLoop, let first = waypoints.first {
@@ -597,11 +625,17 @@ final class AppViewModel {
             request.transportType = .walking
             request.requestsAlternateRoutes = false
 
-            MKDirections(request: request).calculate { [weak self] response, _ in
+            self.routeCalculator.calculate(request: request) { [weak self] response, error in
                 let routeBox = UnsafeSendableBox(response?.routes.first)
+                let errorBox = UnsafeSendableBox(error)
                 MainActor.assumeIsolated {
                     guard let self else { return }
                     guard let route = routeBox.value else {
+                        self.clearDraftGeometry()
+                        self.locationInputError = self.multiPointFailureMessage(
+                            segmentIndex: index,
+                            error: errorBox.value
+                        )
                         self.appState = .selectingA
                         return
                     }
@@ -698,9 +732,6 @@ final class AppViewModel {
                     self.currentPosition = newPos
                     if self.shouldSendCoordinateUpdate(newPos) {
                         self.sendCoordinateAsync(newPos)
-                    }
-                    if targetDistance > 0, Int(targetDistance) % 500 == 0 {
-                        print("d=\(Int(targetDistance))m lat=\(newPos.latitude) lon=\(newPos.longitude)")
                     }
                 }
             }
@@ -837,6 +868,20 @@ final class AppViewModel {
         draftRoutePoints = []
         draftCumulativeRouteDistances = []
         draftTotalRouteDistance = 0
+    }
+
+    private func routeABFailureMessage(for error: (any Error)?) -> String {
+        if error != nil {
+            return "A 到 B 路線計算失敗，請調整起點或終點後再試。"
+        }
+        return "找不到 A 到 B 的可用步行路線，請調整起點或終點後再試。"
+    }
+
+    private func multiPointFailureMessage(segmentIndex: Int, error: (any Error)?) -> String {
+        if error != nil {
+            return "第 \(segmentIndex + 1) 段路線計算失敗，請調整選點後再試。"
+        }
+        return "第 \(segmentIndex + 1) 段找不到可用步行路線，請調整選點後再試。"
     }
 
     private func clearActiveSnapshot(clearPosition: Bool) {

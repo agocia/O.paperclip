@@ -23,7 +23,11 @@ struct ContentView: View {
     @State var purePointImportError: String?
     @State var pendingImportedOverlays: [PurePointOverlay] = []
     @State var pendingImportedOverlayTitles: [String: String] = [:]
+    @State var pendingImportedOverlaySourceURLs: [URL] = []
+    @State var pendingPurePointRemoteApprovalURLs: [URL] = []
+    @State var approvedPurePointRemoteURLs: Set<URL> = []
     @State var isShowingImportedOverlayNamingSheet: Bool = false
+    @State var isShowingPurePointRemoteApprovalSheet: Bool = false
     @State var visibleMapRegion: MKCoordinateRegion
     let routeColors: [Color] = [.yellow, .orange, .mint, .pink]
     private let purePointViewportActivationCount = AppConstants.PurePoint.viewportActivationCount
@@ -138,6 +142,9 @@ struct ContentView: View {
         }
         .sheet(isPresented: $isShowingImportedOverlayNamingSheet) {
             importedOverlayNamingSheet
+        }
+        .sheet(isPresented: $isShowingPurePointRemoteApprovalSheet) {
+            remoteLinkApprovalSheet
         }
         .sheet(isPresented: routeReplacementSheetBinding) {
             routeReplacementSheet
