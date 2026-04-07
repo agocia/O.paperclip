@@ -94,13 +94,7 @@ final class LocationSearchService: NSObject, ObservableObject, MKLocalSearchComp
     private func rankingScore(for item: MKMapItem, query: String) -> Int {
         guard !query.isEmpty else { return 3 }
         let name = (item.name ?? "").lowercased()
-        let address = [
-            item.address?.shortAddress,
-            item.address?.fullAddress,
-            item.addressRepresentations?.fullAddress(includingRegion: false, singleLine: true)
-        ]
-        .compactMap { $0?.lowercased() }
-        .joined(separator: " ")
+        let address = item.paperclipAddressSearchText
 
         if name == query { return 0 }
         if name.hasPrefix(query) { return 1 }
@@ -111,11 +105,12 @@ final class LocationSearchService: NSObject, ObservableObject, MKLocalSearchComp
 
     private func distance(for item: MKMapItem, from reference: CLLocation?) -> CLLocationDistance {
         guard let reference else { return .greatestFiniteMagnitude }
-        return reference.distance(from: item.location)
+        guard let location = item.paperclipLocation else { return .greatestFiniteMagnitude }
+        return reference.distance(from: location)
     }
 
     private func dedupeKey(for item: MKMapItem) -> String {
-        let coordinate = item.location.coordinate
+        let coordinate = item.paperclipCoordinate ?? .init()
         let name = item.name ?? ""
         return "\(name.lowercased())|\(coordinate.latitude)|\(coordinate.longitude)"
     }

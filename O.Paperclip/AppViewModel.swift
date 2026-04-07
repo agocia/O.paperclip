@@ -512,8 +512,8 @@ final class AppViewModel {
         guard operationMode == .routeAB, let a = pointA, let b = pointB else { return }
         clearDraftGeometry()
         let request = MKDirections.Request()
-        request.source = MKMapItem(location: CLLocation(latitude: a.latitude, longitude: a.longitude), address: nil)
-        request.destination = MKMapItem(location: CLLocation(latitude: b.latitude, longitude: b.longitude), address: nil)
+        request.source = MKMapItem(placemark: MKPlacemark(coordinate: a))
+        request.destination = MKMapItem(placemark: MKPlacemark(coordinate: b))
         request.transportType = .walking
         request.requestsAlternateRoutes = true
 
@@ -592,8 +592,8 @@ final class AppViewModel {
             let request = MKDirections.Request()
             let from = routeWaypoints[index]
             let to = routeWaypoints[index + 1]
-            request.source = MKMapItem(location: CLLocation(latitude: from.latitude, longitude: from.longitude), address: nil)
-            request.destination = MKMapItem(location: CLLocation(latitude: to.latitude, longitude: to.longitude), address: nil)
+            request.source = MKMapItem(placemark: MKPlacemark(coordinate: from))
+            request.destination = MKMapItem(placemark: MKPlacemark(coordinate: to))
             request.transportType = .walking
             request.requestsAlternateRoutes = false
 
@@ -968,27 +968,20 @@ final class AppViewModel {
     // MARK: - Search result helpers
 
     func coordinate(for item: MKMapItem) -> CLLocationCoordinate2D? {
-        let coordinate = item.location.coordinate
+        guard let coordinate = item.paperclipCoordinate else { return nil }
         guard CLLocationCoordinate2DIsValid(coordinate) else { return nil }
         return coordinate
     }
 
     func searchResultSubtitle(for item: MKMapItem) -> String {
-        if let representation = item.addressRepresentations {
-            return representation.fullAddress(includingRegion: false, singleLine: true)
-                ?? representation.cityWithContext(.automatic)
-                ?? ""
-        }
-        if let address = item.address {
-            return address.shortAddress ?? address.fullAddress
-        }
-        return ""
+        item.paperclipAddressSummary
     }
 
     func searchResultDistanceText(for item: MKMapItem, cameraRegion: MKCoordinateRegion?) -> String? {
         guard let center = cameraRegion?.center else { return nil }
+        guard let location = item.paperclipLocation else { return nil }
         let reference = CLLocation(latitude: center.latitude, longitude: center.longitude)
-        let distance = reference.distance(from: item.location)
+        let distance = reference.distance(from: location)
         guard distance.isFinite else { return nil }
         return String(format: "%.1fkm", distance / 1000)
     }

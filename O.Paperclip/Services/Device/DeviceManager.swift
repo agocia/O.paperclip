@@ -239,6 +239,7 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
     private var activeTunnelConnectionType: TunnelConnectionType?
     private let privilegedTunnelLog = "/tmp/opaperclip_tunnel.log"
     private let privilegedTunnelPid = "/tmp/opaperclip_tunnel.pid"
+    private let privilegedTunnelStop = "/tmp/opaperclip_tunnel.stop"
     private let runtimeLog = DiagnosticsPaths.logFileURL(named: "device-runtime.log").path
     private let runtimeLogQueue = DispatchQueue(label: "paperclip.runtime.log", qos: .utility)
     private static let manualRsdHostKey = "paperclip.connection.manualRsdHost"
@@ -447,6 +448,8 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
         setStage("驗證裝置服務")
         appendLog("RSD endpoint: \(ep.host):\(ep.port)")
 
+        try ensureDeveloperModeEnabledIfSupported(using: cmd, ep: ep)
+
         _ = try runWithTimeoutLogged(cmd + [
             "mounter", "auto-mount",
             "--rsd", ep.host, ep.port
@@ -479,6 +482,41 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
             step: "嘗試 legacy clear"
         )
         return .legacy
+    }
+
+    private func ensureDeveloperModeEnabledIfSupported(using cmd: [String], ep: Endpoint) throws {
+        let output: String
+        do {
+            output = try runWithTimeoutLogged(
+                cmd + [
+                    "mounter", "query-developer-mode-status",
+                    "--rsd", ep.host, ep.port
+                ],
+                timeout: AppConstants.Timeouts.rsdInfo,
+                step: "檢查開發者模式"
+            )
+        } catch {
+            let lowered = error.localizedDescription.lowercased()
+            if lowered.contains("message not supported")
+                || lowered.contains("unknown command")
+                || lowered.contains("unknowncommand") {
+                appendLog("開發者模式狀態查詢不支援，略過檢查")
+                return
+            }
+            throw error
+        }
+
+        let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if trimmed == "true" {
+            return
+        }
+        if trimmed == "false" {
+            throw NSError(domain: "DeviceManager", code: -1, userInfo: [
+                NSLocalizedDescriptionKey: "裝置尚未開啟開發者模式。請先到 iPhone/iPad 的「設定 > 隱私權與安全性 > 開發者模式」開啟，並依提示重新啟動裝置後再重試。"
+            ])
+        }
+
+        appendLog("無法判斷開發者模式狀態，略過強制檢查")
     }
 
     private var effectiveTunnelUDID: String? {
@@ -515,11 +553,39 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
     }
 
     private func listConnectedDevices(using cmd: [String]) throws -> [USBMuxDevice] {
-        let raw = try runWithTimeoutLogged(
-            cmd + ["usbmux", "list"],
-            timeout: AppConstants.Timeouts.tunnelReady,
-            step: "偵測連線裝置"
-        )
+        let args = cmd + ["usbmux", "list"]
+
+        do {
+            let raw = try runWithTimeoutLogged(
+                args,
+                timeout: AppConstants.Timeouts.tunnelReady,
+                step: "偵測連線裝置"
+            )
+            return decodeUSBMuxDevices(from: raw)
+        } catch {
+            let lowered = error.localizedDescription.lowercased()
+            let isTimeout = lowered.contains("command timed out") && lowered.contains("usbmux list")
+            guard isTimeout else { throw error }
+
+            appendLog("usbmux list 逾時，1 秒後重試一次")
+            Thread.sleep(forTimeInterval: 1.0)
+
+            do {
+                let raw = try runWithTimeoutLogged(
+                    args,
+                    timeout: AppConstants.Timeouts.tunnelReady,
+                    step: "重新偵測連線裝置"
+                )
+                return decodeUSBMuxDevices(from: raw)
+            } catch {
+                throw NSError(domain: "DeviceManager", code: -1, userInfo: [
+                    NSLocalizedDescriptionKey: "偵測 iPhone/iPad 逾時，無法從 usbmuxd 取得裝置列表。請先確認裝置已解鎖並信任這台 Mac，重新插拔 USB 後再試；若仍失敗，請關閉可能占用裝置的 Finder、Xcode、Apple Configurator，再重新啟動 Mac 與 iPhone。"
+                ])
+            }
+        }
+    }
+
+    private func decodeUSBMuxDevices(from raw: String) -> [USBMuxDevice] {
         guard let data = raw.data(using: .utf8) else { return [] }
         return (try? JSONDecoder().decode([USBMuxDevice].self, from: data)) ?? []
     }
@@ -606,12 +672,26 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
         let full = cmd + startTunnelArguments(transport: transport, udid: udid)
         let cmdLine = full.map { shellEscape($0) }.joined(separator: " ")
 
-        let shellCmd =
-            "LOG=\(shellEscape(privilegedTunnelLog)); " +
-            "PIDFILE=\(shellEscape(privilegedTunnelPid)); " +
-            ": > \"$LOG\"; " +
-            "\(cmdLine) >> \"$LOG\" 2>&1 & " +
-            "echo $! > \"$PIDFILE\""
+        let wrapperScript = """
+        LOG=\(shellEscape(privilegedTunnelLog))
+        PIDFILE=\(shellEscape(privilegedTunnelPid))
+        STOPFILE=\(shellEscape(privilegedTunnelStop))
+        rm -f "$STOPFILE"
+        : > "$LOG"
+        \(cmdLine) >> "$LOG" 2>&1 &
+        CHILD=$!
+        echo $CHILD > "$PIDFILE"
+        while kill -0 "$CHILD" >/dev/null 2>&1; do
+          if [ -f "$STOPFILE" ]; then
+            kill "$CHILD" >/dev/null 2>&1 || true
+            break
+          fi
+          sleep 1
+        done
+        wait "$CHILD" >/dev/null 2>&1 || true
+        rm -f "$PIDFILE" "$STOPFILE"
+        """
+        let shellCmd = "/bin/sh -c " + shellEscape(wrapperScript) + " >/dev/null 2>&1 &"
 
         if runWithNonInteractiveSudo(shellCmd) {
             appendLog("以 sudo -n 啟動管理員 tunnel")
@@ -669,10 +749,21 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
         if let pidStr = try? String(contentsOfFile: privilegedTunnelPid, encoding: .utf8)
             .trimmingCharacters(in: .whitespacesAndNewlines),
            !pidStr.isEmpty {
-            let cmd = "if [ -f \(shellEscape(privilegedTunnelPid)) ]; then kill \(pidStr) >/dev/null 2>&1 || true; rm -f \(shellEscape(privilegedTunnelPid)); fi"
+            let cmd = "if [ -f \(shellEscape(privilegedTunnelPid)) ]; then kill \(pidStr) >/dev/null 2>&1 || true; rm -f \(shellEscape(privilegedTunnelPid)) \(shellEscape(privilegedTunnelStop)); fi"
             if !runWithNonInteractiveSudo(cmd) {
-                let apple = "do shell script " + "\"" + shellEscapeForAppleScript(cmd) + "\" with administrator privileges"
-                _ = try? run(["/usr/bin/osascript", "-e", apple])
+                appendLog("sudo -n 無法停止管理員 tunnel，改用 stop file 通知結束")
+                do {
+                    try Data().write(to: URL(fileURLWithPath: privilegedTunnelStop), options: .atomic)
+                    let deadline = Date().addingTimeInterval(2.0)
+                    while Date() < deadline {
+                        if !FileManager.default.fileExists(atPath: privilegedTunnelPid) {
+                            break
+                        }
+                        Thread.sleep(forTimeInterval: AppConstants.Timeouts.pollInterval)
+                    }
+                } catch {
+                    appendLog("寫入 stop file 失敗：\(error.localizedDescription)")
+                }
             }
         }
     }
