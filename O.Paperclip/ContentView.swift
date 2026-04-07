@@ -209,8 +209,12 @@ struct ContentView: View {
                                             Button("確認") { vm.confirmTempCoordinate() }
                                                 .buttonStyle(.borderedProminent)
                                                 .tint(Color(red: 0.85, green: 0.55, blue: 0.35))
-                                            Button("取消") { vm.cancelTempCoordinate() }
+                                            Button(action: { vm.cancelTempCoordinate() }) {
+                                                Text("取消")
+                                                    .foregroundStyle(ModernTheme.label)
+                                            }
                                                 .buttonStyle(.bordered)
+                                                .tint(Color(nsColor: .separatorColor))
                                         }
                                         .controlSize(.small)
                                         .padding(.horizontal, 6)
