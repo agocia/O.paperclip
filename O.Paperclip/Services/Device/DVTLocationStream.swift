@@ -35,7 +35,7 @@ final class DVTLocationStream: DVTStreaming, @unchecked Sendable {
 
         guard let binaryPath = Bundle.main.path(forResource: "dvt-location-stream", ofType: nil) else {
             throw NSError(domain: "DVTLocationStream", code: -1, userInfo: [
-                NSLocalizedDescriptionKey: "找不到 dvt-location-stream 執行檔"
+                NSLocalizedDescriptionKey: "Could not find the dvt-location-stream executable"
             ])
         }
 
@@ -120,7 +120,7 @@ final class DVTLocationStream: DVTStreaming, @unchecked Sendable {
             invalidateStreamState(resetProcess: process?.isRunning != true)
             if required {
                 throw NSError(domain: "DVTLocationStream", code: -1, userInfo: [
-                    NSLocalizedDescriptionKey: "dvt stream stdin 無效"
+                    NSLocalizedDescriptionKey: "dvt stream stdin is not available"
                 ])
             }
             return
@@ -159,7 +159,7 @@ final class DVTLocationStream: DVTStreaming, @unchecked Sendable {
             Thread.sleep(forTimeInterval: 0.05)
         }
         throw NSError(domain: "DVTLocationStream", code: -1, userInfo: [
-            NSLocalizedDescriptionKey: "dvt-location-stream 啟動逾時"
+            NSLocalizedDescriptionKey: "dvt-location-stream startup timed out"
         ])
     }
 

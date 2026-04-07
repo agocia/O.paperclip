@@ -97,10 +97,10 @@ struct ContentView: View {
         guard state.totalMatchingCount > 0 else { return nil }
 
         if state.isDensityLimited {
-            return "為了避免地圖當掉，純點目前只顯示視野內 \(state.points.count) / \(state.viewportMatchingCount) 個。請放大地圖或縮小分類。"
+            return "To keep the map responsive, only \(state.points.count) of \(state.viewportMatchingCount) visible PurePoint markers are shown. Zoom in or narrow the categories."
         }
         if state.isViewportFiltered, state.viewportMatchingCount < state.totalMatchingCount {
-            return "純點數量較多，地圖目前只渲染視野內的 \(state.viewportMatchingCount) 個點位。"
+            return "There are many PurePoint markers, so the map is only rendering the \(state.viewportMatchingCount) markers inside the current viewport."
         }
         return nil
     }
@@ -192,17 +192,17 @@ struct ContentView: View {
                             }
                         } else {
                             if let a = vm.pointA {
-                                Marker(vm.operationMode == .fixedPoint ? "草稿定點" : "草稿起點 A", coordinate: a).tint(.yellow)
+                                Marker(vm.operationMode == .fixedPoint ? "Draft Pin" : "Draft Start A", coordinate: a).tint(.yellow)
                             }
-                            if let b = vm.pointB { Marker("草稿終點 B", coordinate: b).tint(.orange) }
+                            if let b = vm.pointB { Marker("Draft End B", coordinate: b).tint(.orange) }
                             if let temp = vm.tempCoordinate {
-                                Annotation("確認位置", coordinate: temp, anchor: .bottom) {
+                                Annotation("Confirm Location", coordinate: temp, anchor: .bottom) {
                                     VStack(spacing: 6) {
                                         HStack(spacing: 6) {
-                                            Button("確認") { vm.confirmTempCoordinate() }
+                                            Button("Confirm") { vm.confirmTempCoordinate() }
                                                 .buttonStyle(.borderedProminent)
                                                 .tint(Color(red: 0.85, green: 0.55, blue: 0.35))
-                                            Button("取消") { vm.cancelTempCoordinate() }
+                                            Button("Cancel") { vm.cancelTempCoordinate() }
                                                 .buttonStyle(.bordered)
                                         }
                                         .controlSize(.small)
@@ -243,7 +243,7 @@ struct ContentView: View {
                         }
 
                         if let current = vm.currentPosition {
-                            Annotation("目前位置", coordinate: current) {
+                            Annotation("Current Location", coordinate: current) {
                                 Circle()
                                     .fill(Color(red: 0.08, green: 0.24, blue: 0.62))
                                     .frame(width: 18, height: 18)
@@ -253,7 +253,7 @@ struct ContentView: View {
                         }
                     }
                     .mapStyle(.standard(elevation: .flat))
-                    .environment(\.locale, Locale(identifier: "zh_TW"))
+                    .environment(\.locale, Locale(identifier: "en_US"))
                     .onMapCameraChange(frequency: .onEnd) { context in
                         visibleMapRegion = vm.normalizeMapRegion(context.region)
                     }

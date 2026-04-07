@@ -2,8 +2,8 @@ import SwiftUI
 
 enum OperationMode: String, CaseIterable, Identifiable {
     case routeAB = "A-B"
-    case fixedPoint = "定點"
-    case multiPoint = "多點"
+    case fixedPoint = "Pin"
+    case multiPoint = "Multi-point"
 
     var id: String { rawValue }
 }
@@ -31,40 +31,45 @@ enum DeviceConnectionState: Equatable {
     var statusText: String {
         switch self {
         case .disconnected:
-            return "尚未連線"
+            return "Not connected"
         case .connecting(let step):
             return Self.userFacingStepText(step)
         case .connected:
-            return "已連線"
+            return "Connected"
         case .failed:
-            return "暫時無法連線"
+            return "Connection unavailable"
         }
     }
 
     private static func userFacingStepText(_ step: String) -> String {
         let normalized = step.lowercased()
 
-        if normalized.contains("重連") {
-            return "正在重新連線"
+        if normalized.contains("reconnect") {
+            return "Reconnecting"
         }
-        if step.contains("使用手動 RSD") {
-            return "正在使用手動連線設定"
+        if normalized.contains("manual rsd") {
+            return "Using manual connection settings"
         }
-        if step.contains("搜尋 Wi‑Fi 裝置") || step.contains("初始化") || step.contains("檢查") || step.contains("偵測連線裝置") {
-            return "正在尋找你的裝置"
+        if normalized.contains("search")
+            || normalized.contains("initial")
+            || normalized.contains("check")
+            || normalized.contains("detect connected device") {
+            return "Looking for your device"
         }
-        if step.contains("改用 USB") {
-            return "正在切換為更穩定的連線方式"
+        if normalized.contains("switch to usb") {
+            return "Switching to a more stable connection"
         }
-        if step.contains("建立") || step.contains("等待") {
-            return "正在建立連線"
+        if normalized.contains("build") || normalized.contains("wait") {
+            return "Establishing connection"
         }
-        if step.contains("驗證") || step.contains("掛載") || step.contains("讀取") || step.contains("simulate-location") {
-            return "正在準備裝置"
+        if normalized.contains("verify")
+            || normalized.contains("mount")
+            || normalized.contains("read")
+            || normalized.contains("simulate-location") {
+            return "Preparing device"
         }
 
-        return "正在連線"
+        return "Connecting"
     }
 }
-
 

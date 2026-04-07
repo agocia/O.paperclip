@@ -154,7 +154,7 @@ final class AppDiagnostics: ObservableObject, DiagnosticsProviding {
             previousSessionID: previous.sessionID,
             startedAt: previous.startedAt,
             detectedAt: Date(),
-            reason: "偵測到上一個 session 沒有正常結束，可能是閒置時 crash 或被系統強制終止。"
+            reason: "The previous session did not shut down normally. It may have crashed while idle or been terminated by the system."
         )
         lastUnexpectedTermination = record
         appendJSONLine(record, to: DiagnosticsPaths.incidentsURL)

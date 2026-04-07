@@ -6,7 +6,7 @@ struct UnexpectedTerminationSectionView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("上次啟動疑似非正常結束")
+            Text("Previous launch may not have ended normally")
                 .font(.subheadline)
                 .fontWeight(.semibold)
             Text(unexpectedTermination.reason)
@@ -16,7 +16,7 @@ struct UnexpectedTerminationSectionView: View {
                 .font(.caption2)
                 .foregroundColor(.secondary)
                 .textSelection(.enabled)
-            Button("開啟診斷資料夾") {
+            Button("Open diagnostics folder") {
                 diagnostics.openLogsDirectory()
             }
             .buttonStyle(.bordered)

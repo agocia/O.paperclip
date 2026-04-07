@@ -45,7 +45,7 @@ struct O_PaperclipTests {
 
         #expect(overlay.title == "台北純點")
         #expect(overlay.points.count == 1)
-        #expect(overlay.points.first?.categoryID == "咖啡杯")
+        #expect(overlay.points.first?.categoryID == "Coffee Cup")
         #expect(overlay.categories.first?.colorHex == "F57C00")
     }
 
@@ -99,6 +99,6 @@ struct O_PaperclipTests {
         )
 
         #expect(overlay.points.count == 1)
-        #expect(overlay.points.first?.categoryID == "公車")
+        #expect(overlay.points.first?.categoryID == "Bus")
     }
 }

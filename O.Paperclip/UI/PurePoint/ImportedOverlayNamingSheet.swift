@@ -9,11 +9,11 @@ struct ImportedOverlayNamingSheet: View {
     var body: some View {
         NavigationStack {
             VStack(alignment: .leading, spacing: 16) {
-                Text("設定純點圖層名稱")
+                Text("Set PurePoint layer names")
                     .font(.title3)
                     .fontWeight(.semibold)
 
-                Text("匯入後 sidebar 只會顯示這裡設定的名稱。")
+                Text("After import, the sidebar will only show the names you set here.")
                     .font(.caption)
                     .foregroundColor(.secondary)
 
@@ -22,7 +22,7 @@ struct ImportedOverlayNamingSheet: View {
                         ForEach(overlays) { overlay in
                             VStack(alignment: .leading, spacing: 6) {
                                 TextField(
-                                    "圖層名稱",
+                                    "Layer name",
                                     text: Binding(
                                         get: { titles[overlay.id] ?? overlay.title },
                                         set: { titles[overlay.id] = $0 }
@@ -42,9 +42,9 @@ struct ImportedOverlayNamingSheet: View {
 
                 HStack {
                     Spacer()
-                    Button("取消", action: onCancel)
+                    Button("Cancel", action: onCancel)
                         .buttonStyle(.bordered)
-                    Button("匯入", action: onImport)
+                    Button("Import", action: onImport)
                         .buttonStyle(.borderedProminent)
                         .disabled(overlays.isEmpty)
                 }

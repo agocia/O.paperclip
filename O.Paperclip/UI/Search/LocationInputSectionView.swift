@@ -7,7 +7,7 @@ struct LocationInputSectionView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("位置輸入").font(.subheadline).fontWeight(.semibold).foregroundColor(ModernTheme.label)
+            Text("Location Input").font(.subheadline).fontWeight(.semibold).foregroundColor(ModernTheme.label)
 
             SearchBar(placeKeyword: $vm.placeKeyword, onSearch: { vm.searchPlaces(currentRegion: currentRegion) })
 
@@ -97,11 +97,11 @@ struct LocationInputSectionView: View {
                 TextField(
                     "",
                     text: $vm.coordinateInputText,
-                    prompt: Text("請輸入：35.6621161,139.6986385").foregroundColor(.secondary)
+                    prompt: Text("Enter: 35.6621161,139.6986385").foregroundColor(.secondary)
                 )
                 .textFieldStyle(.roundedBorder)
                 .onSubmit { vm.insertCoordinateFromInput() }
-                Button("確認") { vm.insertCoordinateFromInput() }
+                Button("Confirm") { vm.insertCoordinateFromInput() }
                     .buttonStyle(.borderedProminent)
                     .tint(ModernTheme.accent)
                     .controlSize(.small)

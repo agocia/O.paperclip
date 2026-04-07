@@ -6,12 +6,12 @@ struct MovementSettingsSectionView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("移動設定").font(.subheadline).fontWeight(.semibold).foregroundColor(ModernTheme.label)
+            Text("Movement Settings").font(.subheadline).fontWeight(.semibold).foregroundColor(ModernTheme.label)
             VStack(alignment: .leading, spacing: 5) {
                 HStack(spacing: 8) {
-                    Text("當前速度: \(String(format: "%.1f", vm.speed)) km/h")
+                    Text("Current speed: \(String(format: "%.1f", vm.speed)) km/h")
                     if !vm.routes.isEmpty || vm.totalRouteDistance > 0 {
-                        Text("單趟: \(vm.estimatedTime)")
+                        Text("One-way: \(vm.estimatedTime)")
                             .foregroundColor(ModernTheme.info)
                     }
                 }
@@ -22,12 +22,12 @@ struct MovementSettingsSectionView: View {
                     step: AppConstants.Simulation.speedStep
                 )
                 HStack(spacing: 8) {
-                    TextField("速度", text: $speedText)
+                    TextField("Speed", text: $speedText)
                         .textFieldStyle(.roundedBorder)
                         .frame(width: 88)
 
                     Stepper(
-                        "微調 0.1",
+                        "Fine tune 0.1",
                         value: $vm.speed,
                         in: AppConstants.Simulation.speedStep...vm.maximumSpeed,
                         step: AppConstants.Simulation.speedStep
@@ -36,15 +36,15 @@ struct MovementSettingsSectionView: View {
                 }
             }
 
-            Toggle("來回巡邏", isOn: $vm.isEndlessLoop)
+            Toggle("Ping-pong loop", isOn: $vm.isEndlessLoop)
                 .tint(ModernTheme.accent)
                 .disabled(vm.operationMode == .multiPoint && vm.isClosedLoop)
 
             if vm.operationMode == .multiPoint {
                 Text(
                     vm.isClosedLoop
-                        ? "閉圈啟用時會持續繞圈，來回巡邏會自動關閉。"
-                        : "來回巡邏會在非閉圈路線下於終點原路返回。"
+                        ? "Closed loop is enabled, so the route keeps circling and ping-pong loop is turned off automatically."
+                        : "Ping-pong loop makes an open route return along the same path from the end point."
                 )
                 .font(.caption)
                 .foregroundColor(.secondary)
@@ -52,7 +52,7 @@ struct MovementSettingsSectionView: View {
 
             if vm.operationMode == .multiPoint {
                 multiPointWaypointControls
-                Toggle("閉圈（最後連回 P1）", isOn: $vm.isClosedLoop)
+                Toggle("Closed loop (connect last point back to P1)", isOn: $vm.isClosedLoop)
                     .tint(ModernTheme.accent)
                     .disabled(vm.appState != .selectingA && vm.appState != .readyToMove)
             }
@@ -62,11 +62,11 @@ struct MovementSettingsSectionView: View {
 
     private var multiPointWaypointControls: some View {
         HStack {
-            Text("多點數量：\(vm.waypoints.count)")
+            Text("Waypoint count: \(vm.waypoints.count)")
                 .font(.caption)
                 .foregroundColor(.secondary)
             Spacer()
-            Button("移除最後點") {
+            Button("Remove last point") {
                 if !vm.waypoints.isEmpty { vm.waypoints.removeLast() }
             }
             .buttonStyle(.bordered)

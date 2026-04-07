@@ -173,7 +173,7 @@ struct TunnelOutputParser {
 
 final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Sendable {
     @Published private(set) var connectionState: DeviceConnectionState = .disconnected
-    @Published private(set) var deviceName: String = "未連接"
+    @Published private(set) var deviceName: String = "Not connected"
     @Published private(set) var lastError: String?
     @Published var manualRsdHost: String = "" {
         didSet { UserDefaults.standard.set(manualRsdHost, forKey: Self.manualRsdHostKey) }
@@ -248,7 +248,7 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
     private static let wirelessModeKey = "paperclip.connection.wirelessMode"
     private static let logFormatter: DateFormatter = {
         let f = DateFormatter()
-        f.locale = Locale(identifier: "zh_TW")
+        f.locale = Locale(identifier: "en_US_POSIX")
         f.dateFormat = "HH:mm:ss"
         return f
     }()
@@ -279,13 +279,13 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
             if isConnected { return }
             if connectionState == .failed {
                 throw NSError(domain: "DeviceManager", code: -1, userInfo: [
-                    NSLocalizedDescriptionKey: lastError ?? "裝置連線失敗"
+                    NSLocalizedDescriptionKey: lastError ?? "Device connection failed"
                 ])
             }
             try await Task.sleep(for: .milliseconds(200))
         }
         throw NSError(domain: "DeviceManager", code: -1, userInfo: [
-            NSLocalizedDescriptionKey: "裝置連線逾時"
+            NSLocalizedDescriptionKey: "Device connection timed out"
         ])
     }
 
@@ -293,16 +293,16 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
         guard force || !isConnected else { return }
         if !autoTriggered {
             cancelAutoReconnect()
-            appendLog("開始連線 Apple 裝置")
-            setConnectionState(.connecting(step: "初始化"), deviceName: "連線中…", lastError: nil)
+            appendLog("Starting Apple device connection")
+            setConnectionState(.connecting(step: "initializing"), deviceName: "Connecting...", lastError: nil)
         } else {
-            setConnectionState(.connecting(step: "自動重連中"), deviceName: "重新連線中…", lastError: nil)
-            appendLog("執行自動重連（第 \(reconnectAttempt) 次）")
+            setConnectionState(.connecting(step: "reconnecting"), deviceName: "Reconnecting...", lastError: nil)
+            appendLog("Running auto reconnect (attempt \(reconnectAttempt))")
         }
 
         connectionQueue.async {
             if self.isConnectionInFlight {
-                self.appendLog("已有連線流程進行中，略過重複請求")
+                self.appendLog("A connection flow is already in progress. Ignoring duplicate request.")
                 return
             }
             self.isConnectionInFlight = true
@@ -315,32 +315,32 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
                 _ = try self.runWithTimeoutLogged(
                     cmd + ["version"],
                     timeout: AppConstants.Timeouts.pymobiledeviceCheck,
-                    step: "檢查 pymobiledevice3"
+                    step: "Check pymobiledevice3"
                 )
 
                 if let manual = self.manualEndpointIfValid() {
-                    self.setStage("使用手動 RSD")
+                    self.setStage("Use manual RSD")
                     self.rsdEndpoint = manual
                     try self.verifyRsdEndpoint(using: cmd, ep: manual)
                 } else {
                     let tunnelUDID = try self.preferredConnectionUDID(using: cmd)
-                    self.setStage("準備建立連線")
+                    self.setStage("Prepare connection")
                     do {
                         try self.startTunnelAndResolveEndpoint(using: cmd, udid: tunnelUDID)
                     } catch {
                         let err = error.localizedDescription
                         if err.localizedCaseInsensitiveContains("requires root privileges") {
-                            self.appendLog("start-tunnel 需要管理員權限，改用提示模式重試")
+                            self.appendLog("start-tunnel requires admin privileges. Retrying with a prompt.")
                             try self.startTunnelWithAdminPrompt(using: cmd, udid: tunnelUDID)
                         }
                         else if self.shouldFallbackToAnyDevice(for: err) {
-                            self.appendLog("指定 UDID 連線失敗，改為自動選擇目前已連線裝置重試")
+                            self.appendLog("Requested UDID failed. Retrying by auto-selecting the currently connected device.")
                             try self.startTunnelAndResolveEndpoint(using: cmd, udid: nil)
                         } else if try self.shouldFallbackToUSBTunnel(using: cmd, errorMessage: err) {
-                            self.appendLog("Wi‑Fi tunnel 不支援，改用 USB tunnel 重試")
+                            self.appendLog("Wi-Fi tunnel is not supported. Retrying with a USB tunnel.")
                             self.activeTunnelConnectionType = .usb
                             let usbUDID = try self.preferredTunnelUDID(using: cmd)
-                            self.setStage("切換連線方式")
+                            self.setStage("Switch to USB")
                             try self.startTunnelAndResolveEndpoint(using: cmd, udid: usbUDID)
                         } else {
                             throw error
@@ -349,14 +349,14 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
 
                     guard let ep = self.rsdEndpoint else {
                         throw NSError(domain: "DeviceManager", code: -1, userInfo: [
-                            NSLocalizedDescriptionKey: "無法取得 RSD host/port"
+                            NSLocalizedDescriptionKey: "Could not determine the RSD host and port"
                         ])
                     }
                     try self.verifyRsdEndpoint(using: cmd, ep: ep)
                 }
                 guard let ep = self.rsdEndpoint else {
                     throw NSError(domain: "DeviceManager", code: -1, userInfo: [
-                        NSLocalizedDescriptionKey: "RSD endpoint 在連線完成前遺失，請重試"
+                        NSLocalizedDescriptionKey: "The RSD endpoint disappeared before the connection completed. Please try again."
                     ])
                 }
                 let deviceLabel = self.connectedDeviceLabel(using: cmd)
@@ -365,17 +365,17 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
                 DispatchQueue.main.async {
                     print("✅ Tunnel OK: \(ep.host):\(ep.port)")
                 }
-                self.appendLog("連線完成，模式：\(self.simulateLocationMode?.rawValue ?? "unknown")")
+                self.appendLog("Connection ready. Mode: \(self.simulateLocationMode?.rawValue ?? "unknown")")
                 self.cancelAutoReconnect()
                 self.reconnectAttempt = 0
             } catch {
                 self.stopTunnel()
                 let lowered = error.localizedDescription.lowercased()
-                self.setConnectionState(.failed, deviceName: "連線失敗", lastError: error.localizedDescription)
+                self.setConnectionState(.failed, deviceName: "Connection failed", lastError: error.localizedDescription)
                 DispatchQueue.main.async {
                     print("❌ connectDevice error: \(error.localizedDescription)")
                 }
-                self.appendLog("連線失敗：\(error.localizedDescription)")
+                self.appendLog("Connection failed: \(error.localizedDescription)")
                 if autoTriggered || lowered.contains("bad file descriptor") {
                     self.scheduleAutoReconnect(reason: error.localizedDescription)
                 }
@@ -393,17 +393,17 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
 
     private func preferredConnectionUDID(using cmd: [String]) throws -> String? {
         if isWirelessMode {
-            setStage("搜尋可用裝置")
+            setStage("Search available devices")
             let requested = effectiveTunnelUDID
             if let requested, !requested.isEmpty {
-                appendLog("Wireless Mode：使用指定 UDID 建立 Wi‑Fi tunnel")
+                appendLog("Wireless mode: use the specified UDID to create a Wi-Fi tunnel")
                 return requested
             }
             if let connectedUDID = try preferredActiveDeviceUDID(using: cmd) {
-                appendLog("Wireless Mode：沿用目前已配對裝置建立 Wi‑Fi tunnel")
+                appendLog("Wireless mode: reuse the currently paired device to create a Wi-Fi tunnel")
                 return connectedUDID
             }
-            appendLog("Wireless Mode：自動尋找可用的 Wi‑Fi 裝置")
+            appendLog("Wireless mode: automatically search for available Wi-Fi devices")
             return nil
         }
         return try preferredTunnelUDID(using: cmd)
@@ -429,23 +429,23 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
         let devices = try listConnectedDevices(using: cmd)
         guard !devices.isEmpty else {
             throw NSError(domain: "DeviceManager", code: -1, userInfo: [
-                NSLocalizedDescriptionKey: "未偵測到已連線的 iPhone/iPad。請確認裝置已用 USB 接上、已解鎖並信任這台 Mac，且 Finder 或 Xcode 能看到裝置；若你已知 RSD，也可在進階連線直接輸入 host/port。"
+                NSLocalizedDescriptionKey: "No connected iPhone or iPad was detected. Make sure the device is connected over USB, unlocked, and trusted on this Mac, and that Finder or Xcode can see it. If you already know the RSD endpoint, you can also enter the host and port manually in Advanced Connection."
             ])
         }
 
-        appendLog("偵測到裝置：" + devices.map(deviceDebugLabel(for:)).joined(separator: "、"))
+        appendLog("Detected devices: " + devices.map(deviceDebugLabel(for:)).joined(separator: ", "))
 
         guard let requested = effectiveTunnelUDID else { return nil }
         if devices.contains(where: { matchesDevice($0, requestedUDID: requested) }) {
             return requested
         }
 
-        appendLog("指定 UDID \(requested) 不在目前裝置列表中，改用自動選擇")
+        appendLog("Requested UDID \(requested) is not in the current device list. Falling back to auto-selection.")
         return nil
     }
 
     private func verifyRsdEndpoint(using cmd: [String], ep: Endpoint) throws {
-        setStage("驗證裝置服務")
+        setStage("Verify device services")
         appendLog("RSD endpoint: \(ep.host):\(ep.port)")
 
         try ensureDeveloperModeEnabledIfSupported(using: cmd, ep: ep)
@@ -453,33 +453,33 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
         _ = try runWithTimeoutLogged(cmd + [
             "mounter", "auto-mount",
             "--rsd", ep.host, ep.port
-        ], timeout: AppConstants.Timeouts.mountTimeout, step: "掛載 Developer Disk Image")
+        ], timeout: AppConstants.Timeouts.mountTimeout, step: "Mount Developer Disk Image")
 
         _ = try runWithTimeoutLogged(cmd + [
             "remote", "rsd-info",
             "--rsd", ep.host, ep.port
-        ], timeout: AppConstants.Timeouts.rsdInfo, step: "讀取 RSD 資訊")
+        ], timeout: AppConstants.Timeouts.rsdInfo, step: "Read RSD info")
 
         simulateLocationMode = try detectSimulateLocationMode(using: cmd, ep: ep)
-        appendLog("simulate-location 使用：\(simulateLocationMode?.rawValue ?? "unknown")")
+        appendLog("simulate-location mode: \(simulateLocationMode?.rawValue ?? "unknown")")
     }
 
     private func detectSimulateLocationMode(using cmd: [String], ep: Endpoint) throws -> SimulateLocationMode {
-        setStage("偵測 simulate-location 模式")
+        setStage("Detect simulate-location mode")
         do {
             _ = try runWithTimeoutLogged(
                 cmd + SimulateLocationMode.dvt.clearArgs(host: ep.host, port: ep.port),
                 timeout: AppConstants.Timeouts.rsdInfo,
-                step: "嘗試 dvt clear"
+                step: "Try dvt clear"
             )
             return .dvt
         } catch {
-            appendLog("dvt simulate-location 不可用：\(error.localizedDescription)")
+            appendLog("dvt simulate-location is unavailable: \(error.localizedDescription)")
         }
         _ = try runWithTimeoutLogged(
             cmd + SimulateLocationMode.legacy.clearArgs(host: ep.host, port: ep.port),
             timeout: AppConstants.Timeouts.rsdInfo,
-            step: "嘗試 legacy clear"
+            step: "Try legacy clear"
         )
         return .legacy
     }
@@ -493,14 +493,14 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
                     "--rsd", ep.host, ep.port
                 ],
                 timeout: AppConstants.Timeouts.rsdInfo,
-                step: "檢查開發者模式"
+                step: "Check Developer Mode"
             )
         } catch {
             let lowered = error.localizedDescription.lowercased()
             if lowered.contains("message not supported")
                 || lowered.contains("unknown command")
                 || lowered.contains("unknowncommand") {
-                appendLog("開發者模式狀態查詢不支援，略過檢查")
+                appendLog("Developer Mode status query is not supported. Skipping the check.")
                 return
             }
             throw error
@@ -512,11 +512,11 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
         }
         if trimmed == "false" {
             throw NSError(domain: "DeviceManager", code: -1, userInfo: [
-                NSLocalizedDescriptionKey: "裝置尚未開啟開發者模式。請先到 iPhone/iPad 的「設定 > 隱私權與安全性 > 開發者模式」開啟，並依提示重新啟動裝置後再重試。"
+                NSLocalizedDescriptionKey: "Developer Mode is not enabled on the device. On your iPhone or iPad, go to Settings > Privacy & Security > Developer Mode, enable it, restart the device if prompted, and then try again."
             ])
         }
 
-        appendLog("無法判斷開發者模式狀態，略過強制檢查")
+        appendLog("Could not determine Developer Mode status. Skipping the enforced check.")
     }
 
     private var effectiveTunnelUDID: String? {
@@ -559,7 +559,7 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
             let raw = try runWithTimeoutLogged(
                 args,
                 timeout: AppConstants.Timeouts.tunnelReady,
-                step: "偵測連線裝置"
+                step: "Detect connected devices"
             )
             return decodeUSBMuxDevices(from: raw)
         } catch {
@@ -567,19 +567,19 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
             let isTimeout = lowered.contains("command timed out") && lowered.contains("usbmux list")
             guard isTimeout else { throw error }
 
-            appendLog("usbmux list 逾時，1 秒後重試一次")
+            appendLog("usbmux list timed out. Retrying in 1 second.")
             Thread.sleep(forTimeInterval: 1.0)
 
             do {
                 let raw = try runWithTimeoutLogged(
                     args,
                     timeout: AppConstants.Timeouts.tunnelReady,
-                    step: "重新偵測連線裝置"
+                    step: "Detect connected devices again"
                 )
                 return decodeUSBMuxDevices(from: raw)
             } catch {
                 throw NSError(domain: "DeviceManager", code: -1, userInfo: [
-                    NSLocalizedDescriptionKey: "偵測 iPhone/iPad 逾時，無法從 usbmuxd 取得裝置列表。請先確認裝置已解鎖並信任這台 Mac，重新插拔 USB 後再試；若仍失敗，請關閉可能占用裝置的 Finder、Xcode、Apple Configurator，再重新啟動 Mac 與 iPhone。"
+                    NSLocalizedDescriptionKey: "Timed out while detecting the iPhone or iPad because usbmuxd did not return a device list. Make sure the device is unlocked and trusted on this Mac, reconnect the USB cable, and try again. If it still fails, close Finder, Xcode, Apple Configurator, or any other app that may be using the device, then restart both the Mac and the iPhone."
                 ])
             }
         }
@@ -640,7 +640,7 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
 
         for candidateUDID in candidates {
             if udid != nil && candidateUDID == nil {
-                appendLog("改用目前已連線裝置重試管理員 tunnel")
+                appendLog("Retrying the admin tunnel with the currently connected device instead")
             }
             var shouldMoveToNextCandidate = false
             for transport in TunnelTransport.allCases {
@@ -650,7 +650,7 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
                 } catch {
                     let failure = "\(transport.rawValue): \(error.localizedDescription)"
                     failures.append(failure)
-                    appendLog("管理員 tunnel 失敗（\(failure)）")
+                    appendLog("Admin tunnel failed (\(failure))")
                     stopPrivilegedTunnelProcessIfNeeded()
                     if candidateUDID != nil && shouldFallbackToAnyDevice(for: error.localizedDescription) {
                         shouldMoveToNextCandidate = true
@@ -663,12 +663,12 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
             }
         }
         throw NSError(domain: "DeviceManager", code: -1, userInfo: [
-            NSLocalizedDescriptionKey: "已要求管理員權限，但所有 tunnel 協定都失敗。\n" + failures.joined(separator: "\n")
+            NSLocalizedDescriptionKey: "Admin privileges were requested, but every tunnel protocol failed.\n" + failures.joined(separator: "\n")
         ])
     }
 
     private func startTunnelWithAdminPrompt(using cmd: [String], udid: String?, transport: TunnelTransport) throws {
-        setStage("請求系統授權")
+        setStage("Request system authorization")
         let full = cmd + startTunnelArguments(transport: transport, udid: udid)
         let cmdLine = full.map { shellEscape($0) }.joined(separator: " ")
 
@@ -694,13 +694,13 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
         let shellCmd = "/bin/sh -c " + shellEscape(wrapperScript) + " >/dev/null 2>&1 &"
 
         if runWithNonInteractiveSudo(shellCmd) {
-            appendLog("以 sudo -n 啟動管理員 tunnel")
+            appendLog("Started admin tunnel with sudo -n")
         } else {
             let apple = "do shell script " + "\"" + shellEscapeForAppleScript(shellCmd) + "\" with administrator privileges"
             _ = try run(["/usr/bin/osascript", "-e", apple])
-            appendLog("以系統授權視窗啟動管理員 tunnel (\(transport.rawValue))")
+            appendLog("Started admin tunnel using the system authorization dialog (\(transport.rawValue))")
         }
-        appendLog("管理員 tunnel 已啟動，等待 RSD 位址 (\(transport.rawValue))")
+        appendLog("Admin tunnel started. Waiting for RSD endpoint (\(transport.rawValue))")
 
         let deadline = Date().addingTimeInterval(AppConstants.Timeouts.tunnelReady)
         while Date() < deadline {
@@ -708,7 +708,7 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
                 if let pair = TunnelOutputParser.endpoint(in: text) {
                     rsdEndpoint = Endpoint(host: pair.host, port: pair.port)
                     let ep = rsdEndpoint!
-                    appendLog("管理員 tunnel RSD：\(ep.host):\(ep.port)")
+                    appendLog("Admin tunnel RSD: \(ep.host):\(ep.port)")
                     return
                 }
                 if let failure = TunnelOutputParser.immediateFailure(in: text) {
@@ -722,7 +722,7 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
 
         let logText = (try? String(contentsOfFile: privilegedTunnelLog, encoding: .utf8)) ?? ""
         throw NSError(domain: "DeviceManager", code: -1, userInfo: [
-            NSLocalizedDescriptionKey: "已要求管理員權限，但仍未拿到 RSD 位址。\n\(logText)"
+            NSLocalizedDescriptionKey: "Admin privileges were requested, but the RSD endpoint was still not received.\n\(logText)"
         ])
     }
 
@@ -751,7 +751,7 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
            !pidStr.isEmpty {
             let cmd = "if [ -f \(shellEscape(privilegedTunnelPid)) ]; then kill \(pidStr) >/dev/null 2>&1 || true; rm -f \(shellEscape(privilegedTunnelPid)) \(shellEscape(privilegedTunnelStop)); fi"
             if !runWithNonInteractiveSudo(cmd) {
-                appendLog("sudo -n 無法停止管理員 tunnel，改用 stop file 通知結束")
+                appendLog("sudo -n could not stop the admin tunnel. Falling back to the stop file.")
                 do {
                     try Data().write(to: URL(fileURLWithPath: privilegedTunnelStop), options: .atomic)
                     let deadline = Date().addingTimeInterval(2.0)
@@ -762,7 +762,7 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
                         Thread.sleep(forTimeInterval: AppConstants.Timeouts.pollInterval)
                     }
                 } catch {
-                    appendLog("寫入 stop file 失敗：\(error.localizedDescription)")
+                    appendLog("Failed to write the stop file: \(error.localizedDescription)")
                 }
             }
         }
@@ -773,8 +773,8 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
         cancelAutoReconnect()
         clearSimulatedLocation()
         stopTunnel()
-        setConnectionState(.disconnected, deviceName: "未連接", lastError: nil)
-        appendLog("裝置已中斷")
+        setConnectionState(.disconnected, deviceName: "Not connected", lastError: nil)
+        appendLog("Device disconnected")
     }
 
     func disconnectAsync() async {
@@ -799,13 +799,13 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
     func sendLocationToDeviceAsync(latitude: Double, longitude: Double) async throws {
         guard isConnected else {
             throw NSError(domain: "DeviceManager", code: -1, userInfo: [
-                NSLocalizedDescriptionKey: "裝置尚未連線"
+                NSLocalizedDescriptionKey: "The device is not connected"
             ])
         }
         let coordinate = CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
         guard CLLocationCoordinate2DIsValid(coordinate) else {
             throw NSError(domain: "DeviceManager", code: -1, userInfo: [
-                NSLocalizedDescriptionKey: "座標無效"
+                NSLocalizedDescriptionKey: "The coordinate is invalid"
             ])
         }
 
@@ -813,7 +813,7 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
             sendQueue.async { [weak self] in
                 guard let self else {
                     continuation.resume(throwing: NSError(domain: "DeviceManager", code: -1, userInfo: [
-                        NSLocalizedDescriptionKey: "DeviceManager 已釋放"
+                        NSLocalizedDescriptionKey: "DeviceManager has been released"
                     ]))
                     return
                 }
@@ -827,9 +827,9 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
                 }
 
                 self.flushLatestCoordinate()
-                if self.lastError?.contains("發送定位失敗") == true {
+                if self.lastError?.contains("Failed to send location") == true {
                     continuation.resume(throwing: NSError(domain: "DeviceManager", code: -1, userInfo: [
-                        NSLocalizedDescriptionKey: self.lastError ?? "發送定位失敗"
+                        NSLocalizedDescriptionKey: self.lastError ?? "Failed to send location"
                     ]))
                 } else {
                     continuation.resume()
@@ -846,7 +846,7 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
             do {
                 try self.startDvtStreamIfNeeded(host: ep.host, port: ep.port)
             } catch {
-                self.appendLog("啟動 DVT 即時定位流失敗：\(error.localizedDescription)")
+                self.appendLog("Failed to start the live DVT location stream: \(error.localizedDescription)")
             }
         }
     }
@@ -870,12 +870,12 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
                 _ = try self.runWithTimeoutLogged(
                     cmd + mode.clearArgs(host: ep.host, port: ep.port),
                     timeout: AppConstants.Timeouts.rsdInfo,
-                    step: "清除模擬定位"
+                    step: "Clear simulated location"
                 )
-                print("🧹 已清除模擬定位")
+                print("🧹 Simulated location cleared")
             } catch {
-                print("⚠️ 清除失敗: \(error.localizedDescription)")
-                self.appendLog("清除模擬定位失敗：\(error.localizedDescription)")
+                print("⚠️ Clear failed: \(error.localizedDescription)")
+                self.appendLog("Failed to clear simulated location: \(error.localizedDescription)")
             }
         }
     }
@@ -886,13 +886,13 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
             sendQueue.async { [weak self] in
                 guard let self else {
                     continuation.resume(throwing: NSError(domain: "DeviceManager", code: -1, userInfo: [
-                        NSLocalizedDescriptionKey: "DeviceManager 已釋放"
+                        NSLocalizedDescriptionKey: "DeviceManager has been released"
                     ]))
                     return
                 }
                 guard let ep = self.rsdEndpoint else {
                     continuation.resume(throwing: NSError(domain: "DeviceManager", code: -1, userInfo: [
-                        NSLocalizedDescriptionKey: "RSD 未就緒"
+                        NSLocalizedDescriptionKey: "RSD is not ready"
                     ]))
                     return
                 }
@@ -903,11 +903,11 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
                     _ = try self.runWithTimeoutLogged(
                         cmd + mode.clearArgs(host: ep.host, port: ep.port),
                         timeout: AppConstants.Timeouts.rsdInfo,
-                        step: "清除模擬定位"
+                        step: "Clear simulated location"
                     )
                     continuation.resume()
                 } catch {
-                    self.appendLog("清除模擬定位失敗：\(error.localizedDescription)")
+                    self.appendLog("Failed to clear simulated location: \(error.localizedDescription)")
                     continuation.resume(throwing: error)
                 }
             }
@@ -924,7 +924,7 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
         }
 
         guard rsdEndpoint != nil else {
-            setConnectionState(.failed, deviceName: "RSD 未就緒，請重連", lastError: "RSD 未就緒")
+            setConnectionState(.failed, deviceName: "RSD not ready. Reconnect required.", lastError: "RSD is not ready")
             return
         }
 
@@ -934,17 +934,17 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
             try sendCoordinate(latitude: next.latitude, longitude: next.longitude)
             sentLocationCount += 1
             if sentLocationCount % 100 == 0 {
-                appendLog("定位已送出：\(lat), \(lon)")
+                appendLog("Location sent: \(lat), \(lon)")
             }
         } catch {
             let msg = error.localizedDescription
-            print("❌ 發送失敗: \(msg)")
-            appendLog("送出定位失敗：\(msg)")
+            print("❌ Send failed: \(msg)")
+            appendLog("Failed to send location: \(msg)")
             DispatchQueue.main.async {
-                self.lastError = "發送定位失敗：\(msg)"
+                self.lastError = "Failed to send location: \(msg)"
             }
             if msg.lowercased().contains("timeout") || msg.lowercased().contains("broken pipe") || msg.lowercased().contains("connection") {
-                setConnectionState(.failed, deviceName: "Tunnel 中斷，請重連", lastError: msg)
+                setConnectionState(.failed, deviceName: "Tunnel interrupted. Reconnect required.", lastError: msg)
                 scheduleAutoReconnect(reason: msg)
             }
         }
@@ -963,7 +963,7 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
         }
         appendLog("CLI source: bundled missing")
         throw NSError(domain: "DeviceManager", code: -1, userInfo: [
-            NSLocalizedDescriptionKey: "找不到 bundled pymobiledevice3 CLI。請重新安裝 App。"
+            NSLocalizedDescriptionKey: "Could not find the bundled pymobiledevice3 CLI. Please reinstall the app."
         ])
     }
 
@@ -976,18 +976,18 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
             } catch {
                 let failure = "\(transport.rawValue): \(error.localizedDescription)"
                 failures.append(failure)
-                appendLog("tunnel 失敗（\(failure)）")
+                appendLog("Tunnel failed (\(failure))")
                 stopTunnel()
             }
         }
         throw NSError(domain: "DeviceManager", code: -1, userInfo: [
-            NSLocalizedDescriptionKey: "所有 tunnel 協定都失敗。\n" + failures.joined(separator: "\n")
+            NSLocalizedDescriptionKey: "All tunnel protocols failed.\n" + failures.joined(separator: "\n")
         ])
     }
 
     private func startTunnelAndResolveEndpoint(using cmd: [String], udid: String?, transport: TunnelTransport) throws {
         stopTunnel()
-        setStage("等待連線就緒")
+        setStage("Wait for connection")
 
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/env")
@@ -1024,7 +1024,7 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
             out.fileHandleForReading.readabilityHandler = nil
             err.fileHandleForReading.readabilityHandler = nil
             if self.rsdEndpoint != nil && !self.userInitiatedDisconnect {
-                self.handleUnexpectedConnectionLoss(reason: "tunnel 行程已結束（code: \(proc.terminationStatus)）")
+                self.handleUnexpectedConnectionLoss(reason: "Tunnel process exited (code: \(proc.terminationStatus))")
             }
         }
 
@@ -1033,14 +1033,14 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
         tunnelErrPipe = err
 
         let deadline = Date().addingTimeInterval(AppConstants.Timeouts.tunnelReady)
-        appendLog("等待 tunnel 輸出 RSD 位址 (\(transport.rawValue))")
+        appendLog("Waiting for tunnel to output the RSD endpoint (\(transport.rawValue))")
 
         while Date() < deadline {
             let currentText = snapshotText()
             if let pair = TunnelOutputParser.endpoint(in: currentText) {
                 let ep = Endpoint(host: pair.host, port: pair.port)
                 rsdEndpoint = ep
-                appendLog("抓到 RSD 位址：\(ep.host):\(ep.port)")
+                appendLog("RSD endpoint found: \(ep.host):\(ep.port)")
                 out.fileHandleForReading.readabilityHandler = nil
                 err.fileHandleForReading.readabilityHandler = nil
                 return
@@ -1064,10 +1064,10 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
         out.fileHandleForReading.readabilityHandler = nil
         err.fileHandleForReading.readabilityHandler = nil
         let finalText = snapshotText()
-        appendLog("tunnel 未返回 RSD 位址 (\(transport.rawValue))")
+        appendLog("Tunnel did not return an RSD endpoint (\(transport.rawValue))")
 
         throw NSError(domain: "DeviceManager", code: -1, userInfo: [
-            NSLocalizedDescriptionKey: "start-tunnel 逾時或未輸出 RSD 位址。\n\(finalText)"
+            NSLocalizedDescriptionKey: "start-tunnel timed out or did not output an RSD endpoint.\n\(finalText)"
         ])
     }
 
@@ -1119,9 +1119,9 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
     private func handleUnexpectedConnectionLoss(reason: String) {
         guard !userInitiatedDisconnect else { return }
         guard rsdEndpoint != nil || connectionState.isConnected else { return }
-        appendLog("連線中斷：\(reason)")
+        appendLog("Connection interrupted: \(reason)")
         stopTunnel()
-        setConnectionState(.failed, deviceName: "連線已中斷", lastError: reason)
+        setConnectionState(.failed, deviceName: "Connection interrupted", lastError: reason)
         scheduleAutoReconnect(reason: reason)
     }
 
@@ -1131,7 +1131,7 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
             _ = try run(["/usr/bin/sudo", "-n", "/bin/sh", "-c", shellCmd])
             return true
         } catch {
-            appendLog("sudo -n 不可用：\(error.localizedDescription)")
+            appendLog("sudo -n is unavailable: \(error.localizedDescription)")
             return false
         }
     }
@@ -1142,8 +1142,8 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
 
         reconnectAttempt += 1
         let delay = min(AppConstants.DeviceStream.reconnectBackoffCap, pow(2.0, Double(max(0, reconnectAttempt - 1))))
-        setConnectionState(.connecting(step: "等待重連"), deviceName: "等待重新連線…", lastError: lastError)
-        appendLog("排程自動重連（\(String(format: "%.0f", delay))s）原因：\(reason)")
+        setConnectionState(.connecting(step: "wait reconnect"), deviceName: "Waiting to reconnect...", lastError: lastError)
+        appendLog("Scheduling auto reconnect in \(String(format: "%.0f", delay))s. Reason: \(reason)")
 
         let item = DispatchWorkItem { [weak self] in
             guard let self else { return }
@@ -1236,7 +1236,7 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
     private func sendCoordinateByLegacyCommand(latitude: Double, longitude: Double) throws {
         guard let ep = rsdEndpoint else {
             throw NSError(domain: "DeviceManager", code: -1, userInfo: [
-                NSLocalizedDescriptionKey: "RSD 未就緒"
+                NSLocalizedDescriptionKey: "RSD is not ready"
             ])
         }
         let cmd = try resolveCLI()
@@ -1250,7 +1250,7 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
     private func sendCoordinate(latitude: Double, longitude: Double) throws {
         guard let ep = rsdEndpoint else {
             throw NSError(domain: "DeviceManager", code: -1, userInfo: [
-                NSLocalizedDescriptionKey: "RSD 未就緒"
+                NSLocalizedDescriptionKey: "RSD is not ready"
             ])
         }
 
@@ -1286,7 +1286,7 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
                     self.expectedDvtStreamExit = false
                     return
                 }
-                self.handleUnexpectedConnectionLoss(reason: "定位串流已中斷（code: \(status)）")
+                self.handleUnexpectedConnectionLoss(reason: "Location stream exited (code: \(status))")
             }
         )
     }
@@ -1339,7 +1339,7 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
                 let strings = output.strings()
                 let details = [strings.stderr, strings.stdout]
                     .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                    .first(where: { !$0.isEmpty }) ?? "無額外輸出"
+                    .first(where: { !$0.isEmpty }) ?? "No additional output"
                 throw NSError(domain: "DeviceManager", code: -1, userInfo: [
                     NSLocalizedDescriptionKey: "command timed out: \(args.joined(separator: " ")) | \(details)"
                 ])

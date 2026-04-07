@@ -60,7 +60,7 @@ extension ContentView {
     }
 
     var operationModePicker: some View {
-        Picker("模式", selection: $vm.operationMode) {
+        Picker("Mode", selection: $vm.operationMode) {
             ForEach(OperationMode.allCases) { mode in
                 Text(mode.rawValue).tag(mode)
             }
@@ -82,7 +82,7 @@ extension ContentView {
         if let pinned = vm.pinnedCoordinate {
             Text(
                 String(
-                    format: "目前座標（維持在最後信息送出位置）：%.6f, %.6f",
+                    format: "Current coordinate (kept at the last sent location): %.6f, %.6f",
                     pinned.latitude,
                     pinned.longitude
                 )
@@ -262,21 +262,21 @@ extension ContentView {
 
     var routeReplacementSheet: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("開始新路線")
+            Text("Start new route")
                 .font(.title3)
                 .fontWeight(.semibold)
 
-            Text("將以新路線取代目前藍線路線，但不會中斷裝置連線。")
+            Text("The new route will replace the current blue route without disconnecting the device.")
                 .foregroundColor(.secondary)
 
             HStack(spacing: 10) {
                 Spacer()
-                Button("取消") {
+                Button("Cancel") {
                     vm.cancelRouteReplacement()
                 }
                 .buttonStyle(.bordered)
 
-                Button("確認開始") {
+                Button("Confirm and start") {
                     vm.confirmRouteReplacement()
                 }
                 .buttonStyle(.borderedProminent)

@@ -125,17 +125,17 @@ final class AppViewModel {
 
     var resetButtonTitle: String {
         if hasActiveRouteSnapshot {
-            return "清除草稿路線"
+            return "Clear draft route"
         }
-        return operationMode == .fixedPoint ? "清除定位點" : "清除目前路線"
+        return operationMode == .fixedPoint ? "Clear pinned point" : "Clear current route"
     }
 
     var activityNotice: String? {
         if hasActiveRouteSnapshot && hasDraftEdits {
-            return "目前藍線持續運作中，正在編輯黃線草稿。"
+            return "The blue route is still active while you edit the yellow draft."
         }
         if hasActiveRouteSnapshot && !isActiveSimulationRunning {
-            return "目前藍線已停止移動，但定位仍固定在裝置上。"
+            return "The blue route has stopped moving, but the device location is still pinned."
         }
         return nil
     }
@@ -153,16 +153,16 @@ final class AppViewModel {
         }
         let timeSeconds = distance / (speed * (1000.0 / 3600.0))
         if timeSeconds.isInfinite || timeSeconds.isNaN { return "--" }
-        return "\(Int(timeSeconds) / 60) 分 \(Int(timeSeconds) % 60) 秒"
+        return "\(Int(timeSeconds) / 60)m \(Int(timeSeconds) % 60)s"
     }
 
     var buttonTitle: String {
         if !deviceManager.isConnected && (hasReadyDraft || hasActiveRouteSnapshot) {
-            return "請先連線裝置"
+            return "Connect a device first"
         }
         if shouldUseDraftControls {
             if hasActiveRouteSnapshot && hasReadyDraft {
-                return "開始新路線"
+                return "Start new route"
             }
             return draftButtonTitle
         }
@@ -183,30 +183,30 @@ final class AppViewModel {
     private var draftButtonTitle: String {
         if operationMode == .fixedPoint {
             switch appState {
-            case .selectingA, .confirmingA: return "選擇定位點"
-            case .readyToMove: return "開始定位"
+            case .selectingA, .confirmingA: return "Choose pin location"
+            case .readyToMove: return "Start pinning"
             default: break
             }
         }
         if operationMode == .multiPoint && appState == .selectingA {
-            return waypoints.count >= 2 ? "完成選點並計算路線" : "請先選至少 2 點"
+            return waypoints.count >= 2 ? "Finish points and calculate route" : "Choose at least 2 points"
         }
         switch appState {
-        case .selectingA, .selectingB: return "等待選擇..."
-        case .confirmingA: return "確認起點 A"
-        case .confirmingB: return "確認終點 B"
-        case .calculatingRoute: return "計算中..."
-        case .routeSelection: return "確認使用此路線"
-        case .readyToMove: return hasActiveRouteSnapshot ? "開始新路線" : "開始同步移動"
-        case .moving: return "停止移動"
+        case .selectingA, .selectingB: return "Waiting for selection..."
+        case .confirmingA: return "Confirm start A"
+        case .confirmingB: return "Confirm end B"
+        case .calculatingRoute: return "Calculating..."
+        case .routeSelection: return "Use this route"
+        case .readyToMove: return hasActiveRouteSnapshot ? "Start new route" : "Start synced movement"
+        case .moving: return "Stop moving"
         }
     }
 
     private var activeButtonTitle: String {
         if activeOperationMode == .fixedPoint {
-            return isActiveSimulationRunning ? "停止定位(回歸裝置定位）" : "開始定位"
+            return isActiveSimulationRunning ? "Stop pinning (return to device location)" : "Start pinning"
         }
-        return isActiveSimulationRunning ? "停止移動" : "開始同步移動"
+        return isActiveSimulationRunning ? "Stop moving" : "Start synced movement"
     }
 
     private var draftActionDisabled: Bool {
@@ -273,7 +273,7 @@ final class AppViewModel {
 
     func insertPoint(_ coordinate: CLLocationCoordinate2D) {
         guard CLLocationCoordinate2DIsValid(coordinate) else {
-            locationInputError = "座標格式錯誤"
+            locationInputError = "Invalid coordinate format"
             return
         }
         locationInputError = nil
@@ -319,13 +319,13 @@ final class AppViewModel {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let parts = raw.split(separator: ",", maxSplits: 1, omittingEmptySubsequences: true)
         guard parts.count == 2 else {
-            locationInputError = "格式錯誤，請輸入「緯度,經度」"
+            locationInputError = "Invalid format. Use \"latitude,longitude\""
             return
         }
         let lat = Double(String(parts[0]).trimmingCharacters(in: .whitespacesAndNewlines))
         let lon = Double(String(parts[1]).trimmingCharacters(in: .whitespacesAndNewlines))
         guard let lat, let lon else {
-            locationInputError = "請輸入有效數字座標"
+            locationInputError = "Enter valid numeric coordinates"
             return
         }
         insertPoint(CLLocationCoordinate2D(latitude: lat, longitude: lon))
@@ -342,10 +342,10 @@ final class AppViewModel {
             do {
                 let results = try await locationSearchService.search(for: q, region: currentRegion)
                 placeResults = results
-                locationInputError = results.isEmpty ? "找不到符合的地點" : nil
+                locationInputError = results.isEmpty ? "No matching places found" : nil
             } catch {
                 placeResults = []
-                locationInputError = "搜尋失敗，請重試"
+                locationInputError = "Search failed. Please try again."
             }
         }
     }
@@ -357,10 +357,10 @@ final class AppViewModel {
             do {
                 let results = try await locationSearchService.search(for: completion, region: currentRegion)
                 placeResults = results
-                locationInputError = results.isEmpty ? "找不到符合的地點" : nil
+                locationInputError = results.isEmpty ? "No matching places found" : nil
             } catch {
                 placeResults = []
-                locationInputError = "搜尋失敗，請重試"
+                locationInputError = "Search failed. Please try again."
             }
         }
     }
@@ -538,7 +538,7 @@ final class AppViewModel {
         guard pointCount > 1 else {
             clearDraftGeometry()
             appState = .routeSelection
-            locationInputError = "取得的路線點不足，請改選其他路線"
+            locationInputError = "This route does not contain enough points. Try another route."
             return
         }
         var coords = [CLLocationCoordinate2D](repeating: kCLLocationCoordinate2DInvalid, count: pointCount)
@@ -547,7 +547,7 @@ final class AppViewModel {
         guard draftRoutePoints.count > 1 else {
             clearDraftGeometry()
             appState = .routeSelection
-            locationInputError = "路線資料異常，請改選其他路線"
+            locationInputError = "Route data looks invalid. Try another route."
             return
         }
         draftCumulativeRouteDistances = RouteMotionEngine.cumulativeDistances(for: draftRoutePoints)
@@ -576,7 +576,7 @@ final class AppViewModel {
                 let normalized = self.normalizeRoutePoints(accumulator.combinedPoints)
                 guard normalized.count > 1 else {
                     self.clearDraftGeometry()
-                    self.locationInputError = "多點路線無效，請重新選點"
+                    self.locationInputError = "Invalid multi-point route. Please choose the points again."
                     self.appState = .selectingA
                     return
                 }
@@ -608,7 +608,7 @@ final class AppViewModel {
                     accumulator.totalDistance += route.distance
                     let pointCount = route.polyline.pointCount
                     guard pointCount > 1 else {
-                        self.locationInputError = "某一段路線點不足，請調整選點"
+                        self.locationInputError = "One route segment does not contain enough points. Adjust the waypoints."
                         self.appState = .selectingA
                         return
                     }
@@ -616,7 +616,7 @@ final class AppViewModel {
                     route.polyline.getCoordinates(&coords, range: NSRange(location: 0, length: pointCount))
                     let valid = self.normalizeRoutePoints(coords)
                     guard valid.count > 1 else {
-                        self.locationInputError = "某一段路線資料異常，請調整選點"
+                        self.locationInputError = "One route segment returned invalid data. Adjust the waypoints."
                         self.appState = .selectingA
                         return
                     }

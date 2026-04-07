@@ -30,9 +30,9 @@ struct PurePointControlsSectionView<OverlayContent: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text("純點圖層").font(.subheadline).fontWeight(.semibold).foregroundColor(ModernTheme.label)
+                Text("PurePoint Layers").font(.subheadline).fontWeight(.semibold).foregroundColor(ModernTheme.label)
                 Spacer()
-                Button("匯入 KML", action: onImport)
+                Button("Import KML", action: onImport)
                     .buttonStyle(.bordered)
                     .controlSize(.small)
             }
@@ -44,11 +44,11 @@ struct PurePointControlsSectionView<OverlayContent: View>: View {
             }
 
             HStack {
-                Text("目前載入 \(overlayCount) 個純點圖層")
+                Text("\(overlayCount) PurePoint layers loaded")
                     .font(.caption)
                     .foregroundColor(.secondary)
                 Spacer()
-                Button("定位全部", action: onFocusAll)
+                Button("Focus all", action: onFocusAll)
                     .buttonStyle(.bordered)
                     .controlSize(.small)
                     .disabled(!hasVisiblePoints)

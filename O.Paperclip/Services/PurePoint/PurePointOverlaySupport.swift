@@ -220,54 +220,54 @@ enum PurePointImportError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .invalidKML:
-            return "KML 內容無法解析。"
+            return "The KML content could not be parsed."
         case .noPointPlacemarkFound:
-            return "這份 KML 沒有可匯入的點位。"
+            return "This KML file does not contain any importable point markers."
         case .unsupportedLinkedKML(let href):
-            return "無法解析連結式 KML：\(href)"
+            return "Could not resolve linked KML: \(href)"
         }
     }
 }
 
 enum PurePointKMLParser {
     private static let categoryAliases: [(canonical: String, aliases: [String])] = [
-        ("美術館", ["美術館"]),
-        ("遊樂園", ["主題樂園", "遊樂園", "動物園"]),
-        ("電影院", ["電影院"]),
-        ("塔可餅", ["塔可餅"]),
-        ("韓國泡菜", ["韓國泡菜"]),
-        ("法國麵包", ["法國麵包"]),
-        ("咖啡杯", ["咖啡杯"]),
-        ("漢堡", ["漢堡"]),
-        ("壽司", ["壽司"]),
-        ("海灘", ["海灘", "貝殼"]),
-        ("山丘", ["山丘"]),
-        ("水邊", ["水邊"]),
-        ("橋樑", ["橋樑"]),
-        ("義式餐廳", ["義式餐廳", "披薩"]),
-        ("拉麵", ["拉麵"]),
-        ("餐廳", ["餐廳", "廚師"]),
-        ("飛機", ["飛機"]),
-        ("公車", ["公車"]),
-        ("電車", ["電車"]),
-        ("飯店", ["飯店備品", "飯店"]),
-        ("森林", ["森林"]),
-        ("幸運草", ["幸運草", "公園"]),
-        ("甜點", ["甜點"]),
-        ("洗衣店", ["洗衣店"]),
-        ("咖哩", ["咖哩"]),
-        ("五金行", ["五金行", "工具"]),
-        ("化妝品", ["化妝品"]),
-        ("牙刷", ["牙刷"]),
-        ("美容院", ["美容院", "剪刀"]),
-        ("服飾店", ["服飾店", "服裝店"]),
-        ("便利商店", ["便利商店", "便利店"]),
-        ("超市", ["超市"]),
-        ("郵局", ["郵局"]),
-        ("圖書館", ["圖書館", "迷你書"]),
-        ("電池", ["電池", "仙女燈"]),
-        ("體育館", ["體育館"]),
-        ("學校", ["學校", "大學", "學院"])
+        ("Museum", ["美術館"]),
+        ("Amusement Park", ["主題樂園", "遊樂園", "動物園"]),
+        ("Cinema", ["電影院"]),
+        ("Taco", ["塔可餅"]),
+        ("Kimchi", ["韓國泡菜"]),
+        ("Baguette", ["法國麵包"]),
+        ("Coffee Cup", ["咖啡杯"]),
+        ("Burger", ["漢堡"]),
+        ("Sushi", ["壽司"]),
+        ("Beach", ["海灘", "貝殼"]),
+        ("Hill", ["山丘"]),
+        ("Waterside", ["水邊"]),
+        ("Bridge", ["橋樑"]),
+        ("Italian Restaurant", ["義式餐廳", "披薩"]),
+        ("Ramen", ["拉麵"]),
+        ("Restaurant", ["餐廳", "廚師"]),
+        ("Airplane", ["飛機"]),
+        ("Bus", ["公車"]),
+        ("Train", ["電車"]),
+        ("Hotel", ["飯店備品", "飯店"]),
+        ("Forest", ["森林"]),
+        ("Park", ["幸運草", "公園"]),
+        ("Dessert", ["甜點"]),
+        ("Laundry", ["洗衣店"]),
+        ("Curry", ["咖哩"]),
+        ("Hardware Store", ["五金行", "工具"]),
+        ("Cosmetics", ["化妝品"]),
+        ("Toothbrush", ["牙刷"]),
+        ("Salon", ["美容院", "剪刀"]),
+        ("Clothing Store", ["服飾店", "服裝店"]),
+        ("Convenience Store", ["便利商店", "便利店"]),
+        ("Supermarket", ["超市"]),
+        ("Post Office", ["郵局"]),
+        ("Library", ["圖書館", "迷你書"]),
+        ("Battery", ["電池", "仙女燈"]),
+        ("Gym", ["體育館"]),
+        ("School", ["學校", "大學", "學院"])
     ]
 
     private static let fallbackPalette = [
@@ -376,7 +376,7 @@ enum PurePointKMLParser {
             .map(String.init) ?? ""
         let cleanedToken = token.trimmingCharacters(in: .punctuationCharacters)
 
-        return cleanedToken.isEmpty ? "未分類" : cleanedToken
+        return cleanedToken.isEmpty ? "Uncategorized" : cleanedToken
     }
 
     private nonisolated static func fallbackColorHex(for categoryID: String) -> String {

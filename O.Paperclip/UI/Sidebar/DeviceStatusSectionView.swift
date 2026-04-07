@@ -7,7 +7,7 @@ struct DeviceStatusSectionView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("裝置狀態").font(.subheadline).fontWeight(.semibold).foregroundColor(ModernTheme.label)
+            Text("Device Status").font(.subheadline).fontWeight(.semibold).foregroundColor(ModernTheme.label)
 
             HStack {
                 DeviceConnectionIndicator(state: vm.deviceManager.connectionState)
@@ -18,7 +18,7 @@ struct DeviceStatusSectionView: View {
                 Button(action: {
                     vm.deviceManager.isConnected ? vm.deviceManager.disconnect() : vm.deviceManager.connectDevice()
                 }) {
-                    Text(vm.deviceManager.isConnecting ? "連線中…" : (vm.deviceManager.isConnected ? "中斷連線" : "開始連線"))
+                    Text(vm.deviceManager.isConnecting ? "Connecting..." : (vm.deviceManager.isConnected ? "Disconnect" : "Connect"))
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
@@ -30,11 +30,11 @@ struct DeviceStatusSectionView: View {
             .shadow(color: ModernTheme.shadow, radius: 8, y: 3)
 
             VStack(alignment: .leading, spacing: 6) {
-                Text("連線模式")
+                Text("Connection Mode")
                     .font(.caption)
                     .foregroundColor(ModernTheme.secondaryLabel)
 
-                Picker("連線模式", selection: $isWirelessMode) {
+                Picker("Connection Mode", selection: $isWirelessMode) {
                     Label("USB", systemImage: "cable.connector")
                         .tag(false)
                     Label("Wi‑Fi", systemImage: "wifi")
@@ -56,8 +56,8 @@ struct DeviceStatusSectionView: View {
                     .lineLimit(3)
             } else if !vm.deviceManager.isConnected {
                 Text(isWirelessMode
-                     ? "確保 iPhone 與 Mac 在同一個 Wi‑Fi 網路，按下開始連線。"
-                     : "先插上手機並解鎖，按下開始連線即可。")
+                     ? "Make sure your iPhone and Mac are on the same Wi-Fi network, then press Connect."
+                     : "Plug in and unlock your iPhone, then press Connect.")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }

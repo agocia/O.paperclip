@@ -62,35 +62,35 @@ struct PurePointOverlaySection: View {
                     .font(.headline)
                 Spacer()
                 if isImported {
-                    Menu { Button("移除", role: .destructive) { onRemoveImported?() } } label: {
+                    Menu { Button("Remove", role: .destructive) { onRemoveImported?() } } label: {
                         Image(systemName: "ellipsis.circle")
                     }
                     .menuStyle(.borderlessButton)
                 }
             }
 
-            Toggle("開啟\(overlay.title)", isOn: $state.isEnabled)
+            Toggle("Enable \(overlay.title)", isOn: $state.isEnabled)
                 .tint(Color(red: 0.85, green: 0.55, blue: 0.35))
 
             if state.isEnabled {
                 HStack {
-                    Text("顯示 \(visiblePoints.count) / \(overlay.points.count) 個點位")
+                    Text("Showing \(visiblePoints.count) / \(overlay.points.count) markers")
                         .font(.caption)
                         .foregroundColor(.secondary)
                     Spacer()
-                    Button("定位") { onFocus() }
+                    Button("Focus") { onFocus() }
                         .buttonStyle(.bordered)
                         .controlSize(.small)
                         .disabled(visiblePoints.isEmpty)
                 }
 
-                DisclosureGroup("分類篩選", isExpanded: $state.isFilterExpanded) {
+                DisclosureGroup("Category Filters", isExpanded: $state.isFilterExpanded) {
                     VStack(alignment: .leading, spacing: 10) {
                         HStack {
-                            Button("全選") { onSelectAllCategories() }
+                            Button("Select all") { onSelectAllCategories() }
                                 .buttonStyle(.bordered)
                                 .controlSize(.small)
-                            Button("清空") { onClearAllCategories() }
+                            Button("Clear") { onClearAllCategories() }
                                 .buttonStyle(.bordered)
                                 .controlSize(.small)
                                 .disabled(state.selectedCategoryIDs.isEmpty)
