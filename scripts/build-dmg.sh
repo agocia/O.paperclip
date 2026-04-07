@@ -22,9 +22,6 @@ xcodebuild \
   -scheme "${APP_NAME}" \
   -configuration Release \
   -derivedDataPath "${DERIVED_DATA_DIR}" \
-  CODE_SIGNING_ALLOWED=NO \
-  CODE_SIGNING_REQUIRED=NO \
-  CODE_SIGN_IDENTITY="" \
   build
 
 if [[ ! -d "${APP_PATH}" ]]; then
