@@ -211,10 +211,20 @@ struct ContentView: View {
                                                 .tint(Color(red: 0.85, green: 0.55, blue: 0.35))
                                             Button(action: { vm.cancelTempCoordinate() }) {
                                                 Text("取消")
-                                                    .foregroundStyle(ModernTheme.label)
+                                                    .font(.caption.weight(.semibold))
+                                                    .foregroundStyle(Color(red: 0.29, green: 0.24, blue: 0.20))
+                                                    .padding(.horizontal, 10)
+                                                    .padding(.vertical, 5)
+                                                    .background(
+                                                        Capsule()
+                                                            .fill(Color.white.opacity(0.96))
+                                                    )
+                                                    .overlay(
+                                                        Capsule()
+                                                            .stroke(Color.black.opacity(0.14), lineWidth: 1)
+                                                    )
                                             }
-                                                .buttonStyle(.bordered)
-                                                .tint(Color(nsColor: .separatorColor))
+                                                .buttonStyle(.plain)
                                         }
                                         .controlSize(.small)
                                         .padding(.horizontal, 6)

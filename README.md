@@ -13,7 +13,7 @@
 
 | Item | Requirement |
 |------|-------------|
-| macOS | macOS 13 Ventura or later |
+| macOS | macOS 14 Sonoma or later |
 | iPhone / iPad | iOS 16 or later, with Developer Mode enabled |
 | Connection | USB or Wi-Fi (same network) |
 | Other | No need to install Python, Homebrew, or any extra packages |

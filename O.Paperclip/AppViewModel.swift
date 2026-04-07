@@ -137,7 +137,7 @@ final class AppViewModel {
     }
 
     var shouldShowResetButton: Bool {
-        hasActiveRouteSnapshot ? hasDraftEdits : hasDraftEdits
+        hasDraftEdits
     }
 
     var resetButtonTitle: String {

@@ -433,6 +433,53 @@ struct TunnelOutputParser {
     }
 }
 
+enum RemoteBrowseOutputParser {
+    nonisolated static func identifiers(in raw: String) -> [String] {
+        let jsonIdentifiers = identifiersFromJSON(raw)
+        if !jsonIdentifiers.isEmpty {
+            return jsonIdentifiers
+        }
+
+        guard let regex = try? NSRegularExpression(pattern: #"IDENTIFIER:([0-9A-Fa-f\-]+)"#) else {
+            return []
+        }
+        let ns = raw as NSString
+        return regex.matches(in: raw, range: NSRange(location: 0, length: ns.length))
+            .compactMap { match -> String? in
+                guard match.numberOfRanges > 1 else { return nil }
+                let identifier = ns.substring(with: match.range(at: 1)).trimmingCharacters(in: .whitespacesAndNewlines)
+                return identifier.isEmpty ? nil : identifier
+            }
+    }
+
+    nonisolated private static func identifiersFromJSON(_ raw: String) -> [String] {
+        guard let data = raw.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) else {
+            return []
+        }
+
+        if let array = object as? [[String: Any]] {
+            return array.compactMap(identifier(from:))
+        }
+
+        if let dictionary = object as? [String: Any],
+           let array = dictionary["devices"] as? [[String: Any]] {
+            return array.compactMap(identifier(from:))
+        }
+
+        return []
+    }
+
+    nonisolated private static func identifier(from dictionary: [String: Any]) -> String? {
+        let rawIdentifier =
+            dictionary["identifier"] as? String ??
+            dictionary["Identifier"] as? String
+        guard let rawIdentifier else { return nil }
+        let trimmed = rawIdentifier.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+}
+
 final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Sendable {
     @Published private(set) var connectionState: DeviceConnectionState = .disconnected
     @Published private(set) var deviceName: String = "未連接"
@@ -654,19 +701,51 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
     private func preferredConnectionUDID(using cmd: [String]) throws -> String? {
         if isWirelessMode {
             setStage("搜尋可用裝置")
+            appendLog("Wi‑Fi 模式：開始搜尋裝置 UDID")
             let requested = effectiveTunnelUDID
             if let requested, !requested.isEmpty {
-                appendLog("Wireless Mode：使用指定 UDID 建立 Wi‑Fi tunnel")
+                appendLog("Wi‑Fi 模式：使用者已指定 UDID \(DeviceLogRedactor.maskedIdentifier(requested))")
                 return requested
             }
+            appendLog("Wi‑Fi 模式：嘗試從 USB 已連線裝置取得 UDID")
             if let connectedUDID = try preferredActiveDeviceUDID(using: cmd) {
-                appendLog("Wireless Mode：沿用目前已配對裝置建立 Wi‑Fi tunnel")
+                appendLog("Wi‑Fi 模式：從 USB 裝置取得 UDID \(DeviceLogRedactor.maskedIdentifier(connectedUDID))")
                 return connectedUDID
             }
-            appendLog("Wireless Mode：自動尋找可用的 Wi‑Fi 裝置")
+            appendLog("Wi‑Fi 模式：USB 無裝置，改用 Bonjour 探索")
+            if let browsedUDID = try browseRemoteDeviceUDID(using: cmd) {
+                appendLog("Wi‑Fi 模式：Bonjour 探索成功，UDID \(DeviceLogRedactor.maskedIdentifier(browsedUDID))")
+                return browsedUDID
+            }
+            appendLog("Wi‑Fi 模式：所有探查方式皆無結果，將不帶 UDID 嘗試連線")
             return nil
         }
         return try preferredTunnelUDID(using: cmd)
+    }
+
+    private func browseRemoteDeviceUDID(using cmd: [String]) throws -> String? {
+        let browseCommand = cmd + ["remote", "browse"]
+        appendLog("▶ Bonjour 探索 Wi‑Fi 裝置")
+        appendLog("cmd: \(DeviceLogRedactor.sanitizedCommandString(browseCommand))")
+
+        let raw: String
+        do {
+            raw = try runWithTimeout(browseCommand, timeout: 8)
+            appendLog("✓ Bonjour 探索 Wi‑Fi 裝置")
+        } catch {
+            appendLog("✗ Bonjour 探索 Wi‑Fi 裝置：\(error.localizedDescription)")
+            return nil
+        }
+
+        let identifiers = RemoteBrowseOutputParser.identifiers(in: raw)
+        guard !identifiers.isEmpty else {
+            appendLog("Bonjour 探索未找到任何裝置")
+            return nil
+        }
+
+        appendLog("Bonjour 探索到 \(identifiers.count) 台裝置")
+        appendLog("選擇第一台裝置：\(DeviceLogRedactor.maskedIdentifier(identifiers[0]))")
+        return identifiers[0]
     }
 
     private func preferredActiveDeviceUDID(using cmd: [String]) throws -> String? {

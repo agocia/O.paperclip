@@ -111,6 +111,7 @@ final class DVTLocationStream: DVTStreaming, @unchecked Sendable {
         outPipe?.fileHandleForReading.readabilityHandler = nil
         errPipe?.fileHandleForReading.readabilityHandler = nil
         invalidateStreamState(resetProcess: true)
+        resetBufferedOutput()
         nextSequence = 1
     }
 
@@ -137,9 +138,6 @@ final class DVTLocationStream: DVTStreaming, @unchecked Sendable {
     }
 
     private func handleStdoutChunk(_ chunk: String, onOutput: @escaping (String) -> Void) {
-        var lines: [String] = []
-        var didBecomeReady = false
-
         stateLock.lock()
         stdoutBuffer += chunk
         while let nl = stdoutBuffer.firstIndex(of: "\n") {
@@ -148,19 +146,12 @@ final class DVTLocationStream: DVTStreaming, @unchecked Sendable {
             if line.isEmpty { continue }
             if line == "READY" {
                 isReady = true
-                didBecomeReady = true
             }
-            lines.append(line)
+            stateLock.unlock()
+            onOutput(line + "\n")
+            stateLock.lock()
         }
         stateLock.unlock()
-
-        if didBecomeReady {
-            onOutput("READY\n")
-            lines.removeAll { $0 == "READY" }
-        }
-        for line in lines {
-            onOutput(line + "\n")
-        }
     }
 
     private func waitUntilReady(timeout: TimeInterval) throws {

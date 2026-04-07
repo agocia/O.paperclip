@@ -361,6 +361,38 @@ struct O_PaperclipTests {
         #expect(backupText.contains("12345678901234567890"))
     }
 
+    @Test func remoteBrowseParserReadsIdentifiersFromJSON() {
+        let raw = """
+        [
+          {"identifier":"0000111122223333444455556666777788889999","hostname":"iphone.local"},
+          {"Identifier":"AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE","Hostname":"ipad.local"}
+        ]
+        """
+
+        #expect(
+            RemoteBrowseOutputParser.identifiers(in: raw) == [
+                "0000111122223333444455556666777788889999",
+                "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE"
+            ]
+        )
+    }
+
+    @Test func remoteBrowseParserReadsIdentifiersFromTextOutput() {
+        let raw = """
+        DEVICE 1
+        IDENTIFIER:0000111122223333444455556666777788889999
+        DEVICE 2
+        IDENTIFIER:AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE
+        """
+
+        #expect(
+            RemoteBrowseOutputParser.identifiers(in: raw) == [
+                "0000111122223333444455556666777788889999",
+                "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE"
+            ]
+        )
+    }
+
     @MainActor
     @Test func routeABFailureShowsRecoverableError() {
         let vm = AppViewModel(
