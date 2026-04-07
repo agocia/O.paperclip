@@ -325,6 +325,25 @@ private struct PrivilegedTunnelFiles {
     }
 }
 
+private enum PrivilegedTunnelArtifactPreparer {
+    static func prepareReadableArtifacts(
+        files: PrivilegedTunnelFiles,
+        fileManager: FileManager = .default
+    ) {
+        for url in [files.logURL, files.pidURL] {
+            if !fileManager.fileExists(atPath: url.path) {
+                fileManager.createFile(atPath: url.path, contents: Data())
+            } else {
+                try? Data().write(to: url, options: .atomic)
+            }
+            try? fileManager.setAttributes(
+                [.posixPermissions: 0o600],
+                ofItemAtPath: url.path
+            )
+        }
+    }
+}
+
 struct TunnelOutputParser {
     nonisolated static func endpoint(in text: String) -> (host: String, port: String)? {
         if let host = firstMatch(text, pattern: "RSD\\s+Address:\\s*([^\\s\\n\\r]+)"),
@@ -989,6 +1008,7 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
     private func preparePrivilegedTunnelWrapperScript(for command: [String]) throws -> URL {
         ensurePrivilegedTunnelDirectory()
         cleanupPrivilegedTunnelArtifacts(removeScript: false)
+        PrivilegedTunnelArtifactPreparer.prepareReadableArtifacts(files: privilegedTunnelFiles)
 
         let commandLine = command.map(shellEscape).joined(separator: " ")
         let script = """
