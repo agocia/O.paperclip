@@ -2,7 +2,7 @@
 
 **A macOS GPS spoofing tool built specifically for Mac users, allowing you to inject simulated coordinates into an iPhone or iPad over USB or Wi-Fi.**
 
-中文版: [README.CH.md](./README.CH.md)
+Chinese version: [README.CH.md](./README.CH.md)
 
 **Before using this app: your iPhone / iPad must have Developer Mode enabled.**  
 **If this project helps you, you can support its development here: Ko-fi: https://ko-fi.com/agocia**
@@ -13,7 +13,7 @@
 
 | Item | Requirement |
 |------|-------------|
-| macOS | macOS 13 Ventura or later |
+| macOS | macOS 14 Sonoma or later |
 | iPhone / iPad | iOS 16 or later, with Developer Mode enabled |
 | Connection | USB or Wi-Fi (same network) |
 | Other | No need to install Python, Homebrew, or any extra packages |

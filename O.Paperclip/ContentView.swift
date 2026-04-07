@@ -23,7 +23,11 @@ struct ContentView: View {
     @State var purePointImportError: String?
     @State var pendingImportedOverlays: [PurePointOverlay] = []
     @State var pendingImportedOverlayTitles: [String: String] = [:]
+    @State var pendingImportedOverlaySourceURLs: [URL] = []
+    @State var pendingPurePointRemoteApprovalURLs: [URL] = []
+    @State var approvedPurePointRemoteURLs: Set<URL> = []
     @State var isShowingImportedOverlayNamingSheet: Bool = false
+    @State var isShowingPurePointRemoteApprovalSheet: Bool = false
     @State var visibleMapRegion: MKCoordinateRegion
     let routeColors: [Color] = [.yellow, .orange, .mint, .pink]
     private let purePointViewportActivationCount = AppConstants.PurePoint.viewportActivationCount
@@ -139,6 +143,9 @@ struct ContentView: View {
         .sheet(isPresented: $isShowingImportedOverlayNamingSheet) {
             importedOverlayNamingSheet
         }
+        .sheet(isPresented: $isShowingPurePointRemoteApprovalSheet) {
+            remoteLinkApprovalSheet
+        }
         .sheet(isPresented: routeReplacementSheetBinding) {
             routeReplacementSheet
         }
@@ -202,8 +209,22 @@ struct ContentView: View {
                                             Button("Confirm") { vm.confirmTempCoordinate() }
                                                 .buttonStyle(.borderedProminent)
                                                 .tint(Color(red: 0.85, green: 0.55, blue: 0.35))
-                                            Button("Cancel") { vm.cancelTempCoordinate() }
-                                                .buttonStyle(.bordered)
+                                            Button(action: { vm.cancelTempCoordinate() }) {
+                                                Text("Cancel")
+                                                    .font(.caption.weight(.semibold))
+                                                    .foregroundStyle(Color(red: 0.29, green: 0.24, blue: 0.20))
+                                                    .padding(.horizontal, 10)
+                                                    .padding(.vertical, 5)
+                                                    .background(
+                                                        Capsule()
+                                                            .fill(Color.white.opacity(0.96))
+                                                    )
+                                                    .overlay(
+                                                        Capsule()
+                                                            .stroke(Color.black.opacity(0.14), lineWidth: 1)
+                                                    )
+                                            }
+                                                .buttonStyle(.plain)
                                         }
                                         .controlSize(.small)
                                         .padding(.horizontal, 6)

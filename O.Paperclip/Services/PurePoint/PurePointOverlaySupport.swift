@@ -3,6 +3,8 @@ import MapKit
 import UniformTypeIdentifiers
 import CryptoKit
 
+typealias PurePointRemoteDataFetcher = (URL) throws -> Data
+
 public struct PurePointOverlay: Identifiable, Hashable {
     public let id: String
     public let title: String
@@ -55,20 +57,73 @@ enum ImportedPurePointOverlayStore {
         return overlays
     }
 
-    nonisolated static func previewOverlays(from urls: [URL]) throws -> [PurePointOverlay] {
-        try urls.map(previewOverlay(from:))
+    nonisolated static func previewOverlays(
+        from urls: [URL],
+        approvedRemoteURLs: Set<URL> = [],
+        remoteFetcher: PurePointRemoteDataFetcher? = nil
+    ) throws -> [PurePointOverlay] {
+        var overlays: [PurePointOverlay] = []
+        var approvalURLs: [URL] = []
+
+        for url in urls {
+            do {
+                overlays.append(
+                    try previewOverlay(
+                        from: url,
+                        approvedRemoteURLs: approvedRemoteURLs,
+                        remoteFetcher: remoteFetcher
+                    )
+                )
+            } catch let error as PurePointImportError {
+                if case .remoteLinkRequiresApproval(let urls) = error {
+                    approvalURLs.append(contentsOf: urls)
+                    continue
+                }
+                throw error
+            }
+        }
+
+        if !approvalURLs.isEmpty {
+            throw PurePointImportError.remoteLinkRequiresApproval(deduplicatedRemoteURLs(approvalURLs))
+        }
+        return overlays
     }
 
-    nonisolated static func persistImportedOverlays(_ overlays: [PurePointOverlay]) throws -> [PurePointOverlay] {
-        try overlays.map { overlay in
+    nonisolated static func persistImportedOverlays(
+        _ overlays: [PurePointOverlay],
+        approvedRemoteURLs: Set<URL> = [],
+        remoteFetcher: PurePointRemoteDataFetcher? = nil
+    ) throws -> [PurePointOverlay] {
+        var persisted: [PurePointOverlay] = []
+        var approvalURLs: [URL] = []
+
+        for overlay in overlays {
             guard let sourceFilePath = overlay.sourceFilePath else {
                 throw PurePointImportError.invalidKML
             }
-            return try persistImportedOverlay(
-                from: URL(fileURLWithPath: sourceFilePath),
-                preferredTitle: overlay.title
-            )
+
+            do {
+                persisted.append(
+                    try persistImportedOverlay(
+                        from: URL(fileURLWithPath: sourceFilePath),
+                        preferredTitle: overlay.title,
+                        approvedRemoteURLs: approvedRemoteURLs,
+                        remoteFetcher: remoteFetcher
+                    )
+                )
+            } catch let error as PurePointImportError {
+                if case .remoteLinkRequiresApproval(let urls) = error {
+                    approvalURLs.append(contentsOf: urls)
+                    continue
+                }
+                throw error
+            }
         }
+
+        if !approvalURLs.isEmpty {
+            throw PurePointImportError.remoteLinkRequiresApproval(deduplicatedRemoteURLs(approvalURLs))
+        }
+        return persisted
     }
 
     nonisolated static func deleteStoredOverlay(_ overlay: PurePointOverlay) {
@@ -96,8 +151,16 @@ enum ImportedPurePointOverlayStore {
         UserDefaults.standard.set(titles, forKey: storedTitlesKey)
     }
 
-    private nonisolated static func previewOverlay(from url: URL) throws -> PurePointOverlay {
-        let resolvedData = try resolvedKMLData(from: url)
+    private nonisolated static func previewOverlay(
+        from url: URL,
+        approvedRemoteURLs: Set<URL>,
+        remoteFetcher: PurePointRemoteDataFetcher?
+    ) throws -> PurePointOverlay {
+        let resolvedData = try resolvedKMLData(
+            from: url,
+            approvedRemoteURLs: approvedRemoteURLs,
+            remoteFetcher: remoteFetcher
+        )
         return try PurePointKMLParser.parse(
             data: resolvedData,
             fallbackTitle: url.deletingPathExtension().lastPathComponent,
@@ -107,8 +170,17 @@ enum ImportedPurePointOverlayStore {
         )
     }
 
-    private nonisolated static func persistImportedOverlay(from sourceURL: URL, preferredTitle: String) throws -> PurePointOverlay {
-        let resolvedData = try resolvedKMLData(from: sourceURL)
+    private nonisolated static func persistImportedOverlay(
+        from sourceURL: URL,
+        preferredTitle: String,
+        approvedRemoteURLs: Set<URL>,
+        remoteFetcher: PurePointRemoteDataFetcher?
+    ) throws -> PurePointOverlay {
+        let resolvedData = try resolvedKMLData(
+            from: sourceURL,
+            approvedRemoteURLs: approvedRemoteURLs,
+            remoteFetcher: remoteFetcher
+        )
         let digest = stableContentID(for: resolvedData)
         let snapshotURL = snapshotURL(for: digest)
         try FileManager.default.createDirectory(at: snapshotsDirectoryURL, withIntermediateDirectories: true, attributes: nil)
@@ -134,9 +206,18 @@ enum ImportedPurePointOverlayStore {
         )
     }
 
-    private nonisolated static func resolvedKMLData(from url: URL) throws -> Data {
+    private nonisolated static func resolvedKMLData(
+        from url: URL,
+        approvedRemoteURLs: Set<URL>,
+        remoteFetcher: PurePointRemoteDataFetcher?
+    ) throws -> Data {
         let sourceData = try Data(contentsOf: url)
-        return try PurePointKMLResolver.resolveKMLData(from: sourceData, baseURL: url)
+        return try PurePointKMLResolver.resolveKMLData(
+            from: sourceData,
+            baseURL: url,
+            approvedRemoteURLs: approvedRemoteURLs,
+            remoteFetcher: remoteFetcher
+        )
     }
 
     private nonisolated static func previewOverlayID(for path: String) -> String {
@@ -155,11 +236,31 @@ enum ImportedPurePointOverlayStore {
     private nonisolated static func snapshotURL(for digest: String) -> URL {
         snapshotsDirectoryURL.appendingPathComponent("\(digest).kml")
     }
+
+    private nonisolated static func deduplicatedRemoteURLs(_ urls: [URL]) -> [URL] {
+        var seen: Set<URL> = []
+        var result: [URL] = []
+        for url in urls {
+            let normalized = PurePointKMLResolver.normalizedRemoteURL(url)
+            if seen.insert(normalized).inserted {
+                result.append(normalized)
+            }
+        }
+        return result
+    }
 }
 
 enum PurePointKMLResolver {
-    nonisolated static func resolveKMLData(from data: Data, baseURL: URL?) throws -> Data {
+    nonisolated static func resolveKMLData(
+        from data: Data,
+        baseURL: URL?,
+        approvedRemoteURLs: Set<URL> = [],
+        remoteFetcher: PurePointRemoteDataFetcher? = nil
+    ) throws -> Data {
         var currentData = data
+        var currentBaseURL = baseURL
+        let approvedURLs = Set(approvedRemoteURLs.map(normalizedRemoteURL))
+        let fetchRemoteData = remoteFetcher ?? { try Data(contentsOf: $0) }
 
         for _ in 0..<3 {
             if containsPlacemark(in: currentData) {
@@ -172,17 +273,37 @@ enum PurePointKMLResolver {
 
             let resolvedURL: URL
             if let absoluteURL = URL(string: href), absoluteURL.scheme != nil {
-                resolvedURL = absoluteURL
-            } else if let baseURL {
-                resolvedURL = URL(string: href, relativeTo: baseURL)?.absoluteURL ?? baseURL
+                resolvedURL = absoluteURL.absoluteURL
+            } else if let currentBaseURL,
+                      let relativeURL = URL(string: href, relativeTo: currentBaseURL)?.absoluteURL {
+                resolvedURL = relativeURL
             } else {
-                throw PurePointImportError.unsupportedLinkedKML(href)
+                throw PurePointImportError.unsupportedRemoteScheme(href)
             }
 
-            currentData = try Data(contentsOf: resolvedURL)
+            let normalizedURL = normalizedRemoteURL(resolvedURL)
+            guard let scheme = normalizedURL.scheme?.lowercased(),
+                  scheme == "http" || scheme == "https" else {
+                throw PurePointImportError.unsupportedRemoteScheme(normalizedURL.absoluteString)
+            }
+            guard approvedURLs.contains(normalizedURL) else {
+                throw PurePointImportError.remoteLinkRequiresApproval([normalizedURL])
+            }
+
+            currentData = try fetchRemoteData(normalizedURL)
+            currentBaseURL = normalizedURL
         }
 
         return currentData
+    }
+
+    nonisolated static func normalizedRemoteURL(_ url: URL) -> URL {
+        let absoluteURL = url.absoluteURL
+        guard var components = URLComponents(url: absoluteURL, resolvingAgainstBaseURL: false) else {
+            return absoluteURL
+        }
+        components.fragment = nil
+        return components.url ?? absoluteURL
     }
 
     private nonisolated static func containsPlacemark(in data: Data) -> Bool {
@@ -215,7 +336,8 @@ enum PurePointKMLResolver {
 enum PurePointImportError: LocalizedError {
     case invalidKML
     case noPointPlacemarkFound
-    case unsupportedLinkedKML(String)
+    case unsupportedRemoteScheme(String)
+    case remoteLinkRequiresApproval([URL])
 
     var errorDescription: String? {
         switch self {
@@ -223,8 +345,11 @@ enum PurePointImportError: LocalizedError {
             return "The KML content could not be parsed."
         case .noPointPlacemarkFound:
             return "This KML file does not contain any importable point markers."
-        case .unsupportedLinkedKML(let href):
-            return "Could not resolve linked KML: \(href)"
+        case .unsupportedRemoteScheme(let href):
+            return "Only http/https remote KML links are supported: \(href)"
+        case .remoteLinkRequiresApproval(let urls):
+            let urlList = urls.map(\.absoluteString).joined(separator: "\n")
+            return "This KML needs approval before downloading remote content:\n\(urlList)"
         }
     }
 }
