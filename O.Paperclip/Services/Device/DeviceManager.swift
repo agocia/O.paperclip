@@ -1377,12 +1377,11 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
     private func resolveCLI() throws -> [String] {
         if let resourcesURL = Bundle.main.resourceURL {
             let bundledURL = resourcesURL
-                .appendingPathComponent("pymobiledevice3-bundle", isDirectory: true)
                 .appendingPathComponent("pymobiledevice3", isDirectory: false)
             let bundledPath = bundledURL.path
             if FileManager.default.isExecutableFile(atPath: bundledPath) {
-            appendLog("CLI source: bundled (\(bundledPath))")
-            return [bundledPath]
+                appendLog("CLI source: bundled (\(bundledPath))")
+                return [bundledPath]
             }
         }
         appendLog("CLI source: bundled missing")
