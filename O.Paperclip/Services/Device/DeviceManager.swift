@@ -546,6 +546,7 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
     private var expectedDvtStreamExit = false
     private var sentLocationCount: Int = 0
     private var activeTunnelConnectionType: TunnelConnectionType?
+    private var tunnelRequiresAdmin = false
     private let privilegedTunnelFiles = PrivilegedTunnelFiles.makeDefault()
     private let runtimeLogStore = RotatingRuntimeLogStore(logURL: DiagnosticsPaths.logFileURL(named: "device-runtime.log"))
     private let runtimeLogQueue = DispatchQueue(label: "paperclip.runtime.log", qos: .utility)
@@ -619,11 +620,6 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
                 self.activeTunnelConnectionType = self.isWirelessMode ? .wifi : .usb
                 let cmd = try self.resolveCLI()
                 self.appendLog("CLI: \(cmd.joined(separator: " "))")
-                _ = try self.runWithTimeoutLogged(
-                    cmd + ["version"],
-                    timeout: AppConstants.Timeouts.pymobiledeviceCheck,
-                    step: "檢查 pymobiledevice3"
-                )
 
                 if let manual = self.manualEndpointIfValid() {
                     self.setStage("使用手動 RSD")
@@ -633,22 +629,18 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
                     let tunnelUDID = try self.preferredConnectionUDID(using: cmd)
                     self.setStage("準備建立連線")
                     do {
-                        try self.startTunnelAndResolveEndpoint(using: cmd, udid: tunnelUDID)
+                        try self.startPreferredTunnelAndResolveEndpoint(using: cmd, udid: tunnelUDID)
                     } catch {
                         let err = error.localizedDescription
-                        if err.localizedCaseInsensitiveContains("requires root privileges") {
-                            self.appendLog("start-tunnel 需要管理員權限，改用提示模式重試")
-                            try self.startTunnelWithAdminPrompt(using: cmd, udid: tunnelUDID)
-                        }
-                        else if self.shouldFallbackToAnyDevice(for: err) {
+                        if self.shouldFallbackToAnyDevice(for: err) {
                             self.appendLog("指定 UDID 連線失敗，改為自動選擇目前已連線裝置重試")
-                            try self.startTunnelAndResolveEndpoint(using: cmd, udid: nil)
+                            try self.startPreferredTunnelAndResolveEndpoint(using: cmd, udid: nil)
                         } else if try self.shouldFallbackToUSBTunnel(using: cmd, errorMessage: err) {
                             self.appendLog("Wi‑Fi tunnel 不支援，改用 USB tunnel 重試")
                             self.activeTunnelConnectionType = .usb
                             let usbUDID = try self.preferredTunnelUDID(using: cmd)
                             self.setStage("切換連線方式")
-                            try self.startTunnelAndResolveEndpoint(using: cmd, udid: usbUDID)
+                            try self.startPreferredTunnelAndResolveEndpoint(using: cmd, udid: usbUDID)
                         } else {
                             throw error
                         }
@@ -1045,6 +1037,27 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
         ])
     }
 
+    private func startPreferredTunnelAndResolveEndpoint(using cmd: [String], udid: String?) throws {
+        if tunnelRequiresAdmin {
+            appendLog("已知 start-tunnel 需要管理員權限，直接使用授權模式")
+            try startTunnelWithAdminPrompt(using: cmd, udid: udid)
+            return
+        }
+
+        do {
+            try startTunnelAndResolveEndpoint(using: cmd, udid: udid)
+        } catch {
+            let message = error.localizedDescription
+            if message.localizedCaseInsensitiveContains("requires root privileges") {
+                tunnelRequiresAdmin = true
+                appendLog("start-tunnel 需要管理員權限，改用提示模式重試")
+                try startTunnelWithAdminPrompt(using: cmd, udid: udid)
+                return
+            }
+            throw error
+        }
+    }
+
     private func startTunnelArguments(transport: TunnelTransport, udid: String?) -> [String] {
         [
             "remote", "start-tunnel",
@@ -1395,8 +1408,14 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
         for transport in TunnelTransport.allCases {
             do {
                 try startTunnelAndResolveEndpoint(using: cmd, udid: udid, transport: transport)
+                tunnelRequiresAdmin = false
                 return
             } catch {
+                if error.localizedDescription.localizedCaseInsensitiveContains("requires root privileges") {
+                    tunnelRequiresAdmin = true
+                    stopTunnel()
+                    throw error
+                }
                 let failure = "\(transport.rawValue): \(error.localizedDescription)"
                 failures.append(failure)
                 appendLog("tunnel 失敗（\(failure)）")
