@@ -265,6 +265,7 @@
 			);
 			inputPaths = (
 				"$(SRCROOT)/bundled/pymobiledevice3",
+				"$(SRCROOT)/bundled/pymobiledevice3-bundle",
 				"$(SRCROOT)/bundled/dvt-location-stream",
 			);
 			name = "Copy Bundled Tools";
@@ -272,11 +273,12 @@
 			);
 			outputPaths = (
 				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/pymobiledevice3",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/pymobiledevice3-bundle",
 				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/dvt-location-stream",
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "set -e\nmkdir -p \"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH\"\nrm -rf \"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/pymobiledevice3-bundle\"\nrm -f \"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/pymobiledevice3\"\ncp \"$SRCROOT/bundled/pymobiledevice3\" \"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/pymobiledevice3\"\nchmod +x \"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/pymobiledevice3\"\ncp \"$SRCROOT/bundled/dvt-location-stream\" \"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/dvt-location-stream\"\nchmod +x \"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/dvt-location-stream\"\n";
+			shellScript = "set -e\nmkdir -p \"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH\"\nrm -rf \"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/pymobiledevice3-bundle\"\nrm -f \"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/pymobiledevice3\"\ncp \"$SRCROOT/bundled/pymobiledevice3\" \"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/pymobiledevice3\"\nchmod +x \"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/pymobiledevice3\"\ncp -R \"$SRCROOT/bundled/pymobiledevice3-bundle\" \"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/pymobiledevice3-bundle\"\nchmod +x \"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/pymobiledevice3-bundle/pymobiledevice3\"\ncp \"$SRCROOT/bundled/dvt-location-stream\" \"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/dvt-location-stream\"\nchmod +x \"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/dvt-location-stream\"\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 

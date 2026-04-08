@@ -41,6 +41,20 @@ private enum TunnelConnectionType: String {
     case wifi
 }
 
+private enum CLIFlavor: String {
+    case fastBundle = "快速 bundle"
+    case compatibleStandalone = "相容 standalone"
+}
+
+private struct CLIResolution {
+    let command: [String]
+    let flavor: CLIFlavor
+}
+
+private struct PreparedDeviceState {
+    let simulateLocationMode: SimulateLocationMode
+}
+
 private final class LockedStringBuffer: @unchecked Sendable {
     private let lock = NSLock()
     private var text = ""
@@ -547,6 +561,11 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
     private var sentLocationCount: Int = 0
     private var activeTunnelConnectionType: TunnelConnectionType?
     private var tunnelRequiresAdmin = false
+    private var pendingConnectionDeviceKey: String?
+    private var preparedDevices: [String: PreparedDeviceState] = [:]
+    private let cliResolutionLock = NSLock()
+    private var cachedCLIResolution: CLIResolution?
+    private var cliPrewarmStarted = false
     private let privilegedTunnelFiles = PrivilegedTunnelFiles.makeDefault()
     private let runtimeLogStore = RotatingRuntimeLogStore(logURL: DiagnosticsPaths.logFileURL(named: "device-runtime.log"))
     private let runtimeLogQueue = DispatchQueue(label: "paperclip.runtime.log", qos: .utility)
@@ -554,6 +573,7 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
     private static let manualRsdPortKey = "paperclip.connection.manualRsdPort"
     private static let tunnelUDIDKey = "paperclip.connection.tunnelUDID"
     private static let wirelessModeKey = "paperclip.connection.wirelessMode"
+    private static let fastBundleMinimumMajorVersion = 26
     private static let logFormatter: DateFormatter = {
         let f = DateFormatter()
         f.locale = Locale(identifier: "zh_TW")
@@ -568,6 +588,7 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
         manualRsdPort = defaults.string(forKey: Self.manualRsdPortKey) ?? ""
         tunnelUDID = defaults.string(forKey: Self.tunnelUDIDKey) ?? ""
         isWirelessMode = defaults.bool(forKey: Self.wirelessModeKey)
+        startCLIPrewarmIfNeeded()
     }
 
     deinit {
@@ -618,13 +639,14 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
 
             do {
                 self.activeTunnelConnectionType = self.isWirelessMode ? .wifi : .usb
+                self.pendingConnectionDeviceKey = nil
                 let cmd = try self.resolveCLI()
                 self.appendLog("CLI: \(cmd.joined(separator: " "))")
 
                 if let manual = self.manualEndpointIfValid() {
                     self.setStage("使用手動 RSD")
                     self.rsdEndpoint = manual
-                    try self.verifyRsdEndpoint(using: cmd, ep: manual)
+                    try self.verifyRsdEndpoint(using: cmd, ep: manual, deviceKey: nil)
                 } else {
                     let tunnelUDID = try self.preferredConnectionUDID(using: cmd)
                     self.setStage("準備建立連線")
@@ -651,7 +673,7 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
                             NSLocalizedDescriptionKey: "無法取得 RSD host/port"
                         ])
                     }
-                    try self.verifyRsdEndpoint(using: cmd, ep: ep)
+                    try self.verifyRsdEndpoint(using: cmd, ep: ep, deviceKey: self.pendingConnectionDeviceKey)
                 }
                 guard let ep = self.rsdEndpoint else {
                     throw NSError(domain: "DeviceManager", code: -1, userInfo: [
@@ -696,19 +718,23 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
             appendLog("Wi‑Fi 模式：開始搜尋裝置 UDID")
             let requested = effectiveTunnelUDID
             if let requested, !requested.isEmpty {
+                pendingConnectionDeviceKey = requested
                 appendLog("Wi‑Fi 模式：使用者已指定 UDID \(DeviceLogRedactor.maskedIdentifier(requested))")
                 return requested
             }
             appendLog("Wi‑Fi 模式：嘗試從 USB 已連線裝置取得 UDID")
             if let connectedUDID = try preferredActiveDeviceUDID(using: cmd) {
+                pendingConnectionDeviceKey = connectedUDID
                 appendLog("Wi‑Fi 模式：從 USB 裝置取得 UDID \(DeviceLogRedactor.maskedIdentifier(connectedUDID))")
                 return connectedUDID
             }
             appendLog("Wi‑Fi 模式：USB 無裝置，改用 Bonjour 探索")
             if let browsedUDID = try browseRemoteDeviceUDID(using: cmd) {
+                pendingConnectionDeviceKey = browsedUDID
                 appendLog("Wi‑Fi 模式：Bonjour 探索成功，UDID \(DeviceLogRedactor.maskedIdentifier(browsedUDID))")
                 return browsedUDID
             }
+            pendingConnectionDeviceKey = nil
             appendLog("Wi‑Fi 模式：所有探查方式皆無結果，將不帶 UDID 嘗試連線")
             return nil
         }
@@ -766,32 +792,50 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
 
         appendLog("偵測到裝置：" + devices.map(deviceDebugLabel(for:)).joined(separator: "、"))
 
-        guard let requested = effectiveTunnelUDID else { return nil }
+        guard let requested = effectiveTunnelUDID else {
+            if devices.count == 1 {
+                pendingConnectionDeviceKey = devices[0].identifier ?? devices[0].uniqueDeviceID
+            } else {
+                pendingConnectionDeviceKey = nil
+            }
+            return nil
+        }
         if devices.contains(where: { matchesDevice($0, requestedUDID: requested) }) {
+            pendingConnectionDeviceKey = requested
             return requested
         }
 
+        pendingConnectionDeviceKey = nil
         appendLog("指定 UDID \(requested) 不在目前裝置列表中，改用自動選擇")
         return nil
     }
 
-    private func verifyRsdEndpoint(using cmd: [String], ep: Endpoint) throws {
+    private func verifyRsdEndpoint(using cmd: [String], ep: Endpoint, deviceKey: String?) throws {
         setStage("驗證裝置服務")
         appendLog("RSD endpoint: \(ep.host):\(ep.port)")
 
-        try ensureDeveloperModeEnabledIfSupported(using: cmd, ep: ep)
+        let preparedState = deviceKey.flatMap { preparedDevices[$0] }
+        if preparedState != nil {
+            appendLog("使用快取的裝置準備狀態")
+        } else {
+            try ensureDeveloperModeEnabledIfSupported(using: cmd, ep: ep)
+        }
 
         _ = try runWithTimeoutLogged(cmd + [
             "mounter", "auto-mount",
             "--rsd", ep.host, ep.port
         ], timeout: AppConstants.Timeouts.mountTimeout, step: "掛載 Developer Disk Image")
 
-        _ = try runWithTimeoutLogged(cmd + [
-            "remote", "rsd-info",
-            "--rsd", ep.host, ep.port
-        ], timeout: AppConstants.Timeouts.rsdInfo, step: "讀取 RSD 資訊")
+        if let preparedState {
+            simulateLocationMode = preparedState.simulateLocationMode
+            appendLog("simulate-location 使用快取模式：\(preparedState.simulateLocationMode.rawValue)")
+            return
+        }
 
         simulateLocationMode = try detectSimulateLocationMode(using: cmd, ep: ep)
+        if let deviceKey, let simulateLocationMode {
+            preparedDevices[deviceKey] = PreparedDeviceState(simulateLocationMode: simulateLocationMode)
+        }
         appendLog("simulate-location 使用：\(simulateLocationMode?.rawValue ?? "unknown")")
     }
 
@@ -1388,19 +1432,104 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
     }
 
     private func resolveCLI() throws -> [String] {
-        if let resourcesURL = Bundle.main.resourceURL {
-            let bundledURL = resourcesURL
-                .appendingPathComponent("pymobiledevice3", isDirectory: false)
-            let bundledPath = bundledURL.path
-            if FileManager.default.isExecutableFile(atPath: bundledPath) {
-                appendLog("CLI source: bundled (\(bundledPath))")
-                return [bundledPath]
-            }
+        try resolveCLIResolution().command
+    }
+
+    private func resolveCLIResolution() throws -> CLIResolution {
+        cliResolutionLock.lock()
+        if let cachedCLIResolution {
+            cliResolutionLock.unlock()
+            return cachedCLIResolution
         }
+        cliResolutionLock.unlock()
+
+        guard let resourcesURL = Bundle.main.resourceURL else {
+            throw NSError(domain: "DeviceManager", code: -1, userInfo: [
+                NSLocalizedDescriptionKey: "找不到 App Resources。請重新安裝 App。"
+            ])
+        }
+
+        let fileManager = FileManager.default
+        let bundlePath = resourcesURL
+            .appendingPathComponent("pymobiledevice3-bundle", isDirectory: true)
+            .appendingPathComponent("pymobiledevice3", isDirectory: false)
+            .path
+        let standalonePath = resourcesURL
+            .appendingPathComponent("pymobiledevice3", isDirectory: false)
+            .path
+        let supportsFastBundle = ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= Self.fastBundleMinimumMajorVersion
+
+        if supportsFastBundle,
+           fileManager.isExecutableFile(atPath: bundlePath),
+           smokeTestCLI(atPath: bundlePath, timeout: 5.0) {
+            let resolution = CLIResolution(command: [bundlePath], flavor: .fastBundle)
+            cacheCLIResolution(resolution)
+            appendLog("CLI source: \(resolution.flavor.rawValue) (\(bundlePath))")
+            return resolution
+        }
+
+        if fileManager.isExecutableFile(atPath: standalonePath) {
+            let resolution = CLIResolution(command: [standalonePath], flavor: .compatibleStandalone)
+            cacheCLIResolution(resolution)
+            if supportsFastBundle && fileManager.isExecutableFile(atPath: bundlePath) {
+                appendLog("快速 bundle 驗證失敗，改用 \(resolution.flavor.rawValue)")
+            } else {
+                appendLog("CLI source: \(resolution.flavor.rawValue) (\(standalonePath))")
+            }
+            return resolution
+        }
+
+        if fileManager.isExecutableFile(atPath: bundlePath) {
+            let resolution = CLIResolution(command: [bundlePath], flavor: .fastBundle)
+            cacheCLIResolution(resolution)
+            appendLog("僅找到快速 bundle，將直接使用")
+            return resolution
+        }
+
         appendLog("CLI source: bundled missing")
         throw NSError(domain: "DeviceManager", code: -1, userInfo: [
             NSLocalizedDescriptionKey: "找不到 bundled pymobiledevice3 CLI。請重新安裝 App。"
         ])
+    }
+
+    private func cacheCLIResolution(_ resolution: CLIResolution) {
+        cliResolutionLock.lock()
+        cachedCLIResolution = resolution
+        cliResolutionLock.unlock()
+    }
+
+    private func smokeTestCLI(atPath path: String, timeout: TimeInterval) -> Bool {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: path)
+        process.arguments = ["version"]
+        process.standardInput = FileHandle.nullDevice
+
+        let out = Pipe()
+        let err = Pipe()
+        process.standardOutput = out
+        process.standardError = err
+
+        do {
+            try process.run()
+        } catch {
+            return false
+        }
+
+        let deadline = Date().addingTimeInterval(timeout)
+        while process.isRunning && Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+
+        if process.isRunning {
+            process.terminate()
+            return false
+        }
+
+        let stdout = String(data: out.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        let stderr = String(data: err.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        let combined = (stdout + "\n" + stderr).lowercased()
+        guard process.terminationStatus == 0 else { return false }
+        return !combined.contains("traceback")
     }
 
     private func startTunnelAndResolveEndpoint(using cmd: [String], udid: String?) throws {
@@ -1542,6 +1671,7 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
         rsdEndpoint = nil
         simulateLocationMode = nil
         activeTunnelConnectionType = nil
+        pendingConnectionDeviceKey = nil
         stopSendPipelineSynchronously()
 
         tunnelOutPipe?.fileHandleForReading.readabilityHandler = nil
@@ -1607,6 +1737,30 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
     private func cancelAutoReconnect() {
         autoReconnectWorkItem?.cancel()
         autoReconnectWorkItem = nil
+    }
+
+    private func startCLIPrewarmIfNeeded() {
+        cliResolutionLock.lock()
+        guard !cliPrewarmStarted else {
+            cliResolutionLock.unlock()
+            return
+        }
+        cliPrewarmStarted = true
+        cliResolutionLock.unlock()
+
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            self?.prewarmCLIIfNeeded()
+        }
+    }
+
+    private func prewarmCLIIfNeeded() {
+        guard ProcessInfo.processInfo.operatingSystemVersion.majorVersion < Self.fastBundleMinimumMajorVersion else {
+            return
+        }
+        guard let resourcesURL = Bundle.main.resourceURL else { return }
+        let standalonePath = resourcesURL.appendingPathComponent("pymobiledevice3", isDirectory: false).path
+        guard FileManager.default.isExecutableFile(atPath: standalonePath) else { return }
+        _ = smokeTestCLI(atPath: standalonePath, timeout: 8.0)
     }
 
     private func setStage(_ stage: String) {
