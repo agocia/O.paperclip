@@ -10,6 +10,10 @@ struct UnexpectedTerminationRecord: Codable {
     let reason: String
 }
 
+enum AppSessionContext {
+    static let currentSessionID = UUID().uuidString
+}
+
 private struct ActiveSessionMarker: Codable {
     let sessionID: String
     let startedAt: Date
@@ -96,7 +100,7 @@ final class AppDiagnostics: ObservableObject, DiagnosticsProviding {
     let logsDirectoryURL = DiagnosticsPaths.logsDirectoryURL
 
     private var currentSession = ActiveSessionMarker(
-        sessionID: UUID().uuidString,
+        sessionID: AppSessionContext.currentSessionID,
         startedAt: Date(),
         lastKnownPhase: "launching"
     )

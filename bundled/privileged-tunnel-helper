@@ -1,0 +1,124 @@
+#!/bin/sh
+set -eu
+
+mode="${1:-}"
+[ -n "$mode" ] || exit 64
+shift
+
+write_record() {
+  record_file=$1
+  session_id=$2
+  pid_file=$3
+  stop_file=$4
+  helper_pid=$5
+  child_pid=$6
+  command_label=$7
+  started_at=$(/bin/date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+  cat > "$record_file" <<EOF
+helperID=$(/usr/bin/basename "$record_file" .state)
+sessionID=$session_id
+kind=privileged-tunnel
+pid=$helper_pid
+childPID=$child_pid
+parentPID=$PPID
+startedAt=$started_at
+pidFilePath=$pid_file
+stopFilePath=$stop_file
+command=$command_label
+EOF
+  /bin/chmod 600 "$record_file" || true
+}
+
+launch_detached() {
+  /usr/bin/nohup "$0" --serve "$@" >/dev/null 2>&1 &
+}
+
+serve() {
+  [ "$#" -ge 7 ] || exit 64
+
+  record_file=$1
+  session_id=$2
+  log_file=$3
+  pid_file=$4
+  stop_file=$5
+  shift 5
+
+  /bin/mkdir -p "$(/usr/bin/dirname "$log_file")"
+  /bin/mkdir -p "$(/usr/bin/dirname "$pid_file")"
+  /bin/mkdir -p "$(/usr/bin/dirname "$stop_file")"
+  /bin/mkdir -p "$(/usr/bin/dirname "$record_file")"
+
+  /bin/rm -f "$stop_file"
+  : > "$log_file"
+
+  "$@" >>"$log_file" 2>&1 &
+  child_pid=$!
+  /usr/bin/printf '%s\n' "$child_pid" > "$pid_file"
+  write_record "$record_file" "$session_id" "$pid_file" "$stop_file" "$$" "$child_pid" "$(/usr/bin/basename "$1")"
+
+  trap 'kill "$child_pid" >/dev/null 2>&1 || true' TERM INT HUP
+
+  while kill -0 "$child_pid" >/dev/null 2>&1; do
+    if [ -f "$stop_file" ]; then
+      kill "$child_pid" >/dev/null 2>&1 || true
+      break
+    fi
+    sleep 1
+  done
+
+  status=0
+  if wait "$child_pid"; then
+    status=0
+  else
+    status=$?
+  fi
+
+  /bin/rm -f "$pid_file" "$stop_file" "$record_file"
+  exit "$status"
+}
+
+cleanup() {
+  [ "$#" -ge 5 ] || exit 64
+
+  record_file=$1
+  pid_file=$2
+  stop_file=$3
+  helper_pid=$4
+  child_pid=$5
+
+  : > "$stop_file" || true
+
+  if [ "$child_pid" -gt 1 ] 2>/dev/null; then
+    kill "$child_pid" >/dev/null 2>&1 || true
+  fi
+  if [ "$helper_pid" -gt 1 ] 2>/dev/null; then
+    kill "$helper_pid" >/dev/null 2>&1 || true
+  fi
+
+  sleep 1
+
+  if [ "$child_pid" -gt 1 ] 2>/dev/null; then
+    kill -9 "$child_pid" >/dev/null 2>&1 || true
+  fi
+  if [ "$helper_pid" -gt 1 ] 2>/dev/null; then
+    kill -9 "$helper_pid" >/dev/null 2>&1 || true
+  fi
+
+  /bin/rm -f "$pid_file" "$stop_file" "$record_file"
+}
+
+case "$mode" in
+  --launch-detached)
+    launch_detached "$@"
+    ;;
+  --serve)
+    serve "$@"
+    ;;
+  --cleanup)
+    cleanup "$@"
+    ;;
+  *)
+    exit 64
+    ;;
+esac
