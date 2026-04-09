@@ -36,6 +36,24 @@ cd O.Paperclip
 xcodebuild -project O.Paperclip.xcodeproj -scheme O.Paperclip -configuration Release build
 ```
 
+#### Open the app after building
+
+The command above builds `O.Paperclip.app` into Xcode's `DerivedData` (not into the repository root).
+
+```bash
+APP_PATH="$(find ~/Library/Developer/Xcode/DerivedData -path "*/Build/Products/Release/O.Paperclip.app" -print -quit)"
+open "$APP_PATH"
+```
+
+If you want a fixed output path, use this instead:
+
+```bash
+xcodebuild -project O.Paperclip.xcodeproj -scheme O.Paperclip -configuration Release -derivedDataPath build build
+open build/Build/Products/Release/O.Paperclip.app
+```
+
+> First launch may still be blocked by Gatekeeper. If so, right-click `O.Paperclip.app` → `Open` → confirm.
+
 ---
 
 ## Before You Start

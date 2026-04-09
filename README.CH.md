@@ -12,7 +12,7 @@
 
 | 項目 | 需求 |
 |------|------|
-| macOS | 13 Ventura 以上 |
+| macOS | 14 Sonoma 以上 |
 | iPhone / iPad | iOS 16 以上，需開啟「開發者模式」 |
 | 連線方式 | USB 或 Wi‑Fi（同一網路） |
 | 其他 | 無需安裝 Python、Homebrew 或任何套件 |
@@ -34,6 +34,24 @@ git clone https://github.com/agocia/O.Paperclip.git
 cd O.Paperclip
 xcodebuild -project O.Paperclip.xcodeproj -scheme O.Paperclip -configuration Release build
 ```
+
+#### 建置完成後如何開啟 App
+
+上面的指令會把 `O.Paperclip.app` 放在 Xcode 的 `DerivedData`，不會出現在專案根目錄。
+
+```bash
+APP_PATH="$(find ~/Library/Developer/Xcode/DerivedData -path "*/Build/Products/Release/O.Paperclip.app" -print -quit)"
+open "$APP_PATH"
+```
+
+如果你想要固定輸出路徑，建議改用：
+
+```bash
+xcodebuild -project O.Paperclip.xcodeproj -scheme O.Paperclip -configuration Release -derivedDataPath build build
+open build/Build/Products/Release/O.Paperclip.app
+```
+
+> 第一次開啟若被 Gatekeeper 擋住，請右鍵 `O.Paperclip.app` →「開啟」→ 再確認一次。
 
 ---
 
