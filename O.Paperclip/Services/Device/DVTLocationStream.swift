@@ -27,24 +27,6 @@ final class DVTLocationStream: DVTStreaming, @unchecked Sendable {
         onError: @escaping @Sendable (String) -> Void,
         onExit: @escaping @Sendable (Int32) -> Void
     ) throws {
-        try start(
-            host: host,
-            port: port,
-            onOutput: onOutput,
-            onError: onError,
-            onStart: { _ in },
-            onExit: onExit
-        )
-    }
-
-    func start(
-        host: String,
-        port: String,
-        onOutput: @escaping @Sendable (String) -> Void,
-        onError: @escaping @Sendable (String) -> Void,
-        onStart: @escaping @Sendable (Int32) -> Void,
-        onExit: @escaping @Sendable (Int32) -> Void
-    ) throws {
         if isRunning, currentHost == host, currentPort == port {
             return
         }
@@ -97,13 +79,7 @@ final class DVTLocationStream: DVTStreaming, @unchecked Sendable {
         nextSequence = 1
         resetBufferedOutput()
         setReady(false)
-        onStart(p.processIdentifier)
-        do {
-            try waitUntilReady(timeout: 8.0)
-        } catch {
-            stop()
-            throw error
-        }
+        try waitUntilReady(timeout: 8.0)
     }
 
     func send(latitude: Double, longitude: Double) throws {
@@ -126,6 +102,7 @@ final class DVTLocationStream: DVTStreaming, @unchecked Sendable {
         try? writeCommand("QUIT\n", required: false)
 
         if let p = process, p.isRunning {
+            p.terminationHandler = nil
             p.terminate()
             Thread.sleep(forTimeInterval: AppConstants.Timeouts.dvtStreamStop)
             if p.isRunning { p.interrupt() }
