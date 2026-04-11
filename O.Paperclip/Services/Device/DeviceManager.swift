@@ -98,12 +98,6 @@ private final class LockedProcessOutput: @unchecked Sendable {
     }
 }
 
-private struct HelperProcessSnapshot {
-    let pid: Int32
-    let parentPID: Int32
-    let command: String
-}
-
 enum PrivilegedTunnelPIDParser {
     static func parse(_ value: String) -> Int? {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -330,6 +324,7 @@ private struct PrivilegedTunnelFiles {
     let logURL: URL
     let pidURL: URL
     let stopURL: URL
+    let scriptURL: URL
 
     static func makeDefault() -> Self {
         let directoryURL = DiagnosticsPaths.directoryURL(named: "PrivilegedTunnel")
@@ -338,7 +333,8 @@ private struct PrivilegedTunnelFiles {
             directoryURL: directoryURL,
             logURL: directoryURL.appendingPathComponent("opaperclip_tunnel.log"),
             pidURL: directoryURL.appendingPathComponent("opaperclip_tunnel.pid"),
-            stopURL: directoryURL.appendingPathComponent("opaperclip_tunnel.stop")
+            stopURL: directoryURL.appendingPathComponent("opaperclip_tunnel.stop"),
+            scriptURL: directoryURL.appendingPathComponent("opaperclip_tunnel_wrapper.sh")
         )
     }
 }
@@ -590,10 +586,8 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
     private var cachedCLIResolution: CLIResolution?
     private var cliPrewarmStarted = false
     private let privilegedTunnelFiles = PrivilegedTunnelFiles.makeDefault()
-    private let helperRegistry = HelperProcessRegistry()
     private let runtimeLogStore = RotatingRuntimeLogStore(logURL: DiagnosticsPaths.logFileURL(named: "device-runtime.log"))
     private let runtimeLogQueue = DispatchQueue(label: "paperclip.runtime.log", qos: .utility)
-    private let helperSessionID = AppSessionContext.currentSessionID
     private static let manualRsdHostKey = "paperclip.connection.manualRsdHost"
     private static let manualRsdPortKey = "paperclip.connection.manualRsdPort"
     private static let tunnelUDIDKey = "paperclip.connection.tunnelUDID"
@@ -605,8 +599,6 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
         f.dateFormat = "HH:mm:ss"
         return f
     }()
-    private var activeTunnelHelperID: String?
-    private var activeDVTStreamHelperID: String?
 
     init() {
         sendQueue.setSpecific(key: sendQueueSpecificKey, value: sendQueueSpecificValue)
@@ -615,7 +607,6 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
         manualRsdPort = defaults.string(forKey: Self.manualRsdPortKey) ?? ""
         tunnelUDID = defaults.string(forKey: Self.tunnelUDIDKey) ?? ""
         isWirelessMode = defaults.bool(forKey: Self.wirelessModeKey)
-        startHelperCleanupIfNeeded()
         startCLIPrewarmIfNeeded()
     }
 
@@ -666,8 +657,6 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
             defer { self.isConnectionInFlight = false }
 
             do {
-                self.recoverManagedHelperProcesses(reason: autoTriggered ? "reconnect" : "connect")
-                self.cleanupOrphanedHelperProcesses()
                 self.activeTunnelConnectionType = self.isWirelessMode ? .wifi : .usb
                 self.pendingConnectionDeviceKey = nil
                 let cmd = try self.resolveCLI()
@@ -797,7 +786,7 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
     }
 
     private func preferredActiveDeviceUDID(using cmd: [String]) throws -> String? {
-        let devices = try listConnectedDevices(using: cmd, connectionType: .usb)
+        let devices = try listConnectedDevices(using: cmd)
         guard !devices.isEmpty else { return nil }
 
         if let requested = effectiveTunnelUDID,
@@ -813,14 +802,8 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
     }
 
     private func preferredTunnelUDID(using cmd: [String]) throws -> String? {
-        let devices = try listConnectedDevices(using: cmd, connectionType: .usb)
+        let devices = try listConnectedDevices(using: cmd)
         guard !devices.isEmpty else {
-            let allDevices = (try? listConnectedDevices(using: cmd)) ?? []
-            if allDevices.contains(where: { isNetworkDevice($0) }) {
-                throw NSError(domain: "DeviceManager", code: -1, userInfo: [
-                    NSLocalizedDescriptionKey: "目前只找到 Wi‑Fi 配對裝置，USB 模式無法建立 tunnel。請改切換到 Wi‑Fi 模式，或重新插拔 USB 並確認裝置已解鎖、已信任這台 Mac。"
-                ])
-            }
             throw NSError(domain: "DeviceManager", code: -1, userInfo: [
                 NSLocalizedDescriptionKey: "未偵測到已連線的 iPhone/iPad。請確認裝置已用 USB 接上、已解鎖並信任這台 Mac，且 Finder 或 Xcode 能看到裝置；若你已知 RSD，也可在進階連線直接輸入 host/port。"
             ])
@@ -963,8 +946,8 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
             || lower.contains("usbmux")
     }
 
-    private func listConnectedDevices(using cmd: [String], connectionType: TunnelConnectionType? = nil) throws -> [USBMuxDevice] {
-        let args = cmd + ["usbmux", "list"] + usbmuxListFilterArguments(for: connectionType)
+    private func listConnectedDevices(using cmd: [String]) throws -> [USBMuxDevice] {
+        let args = cmd + ["usbmux", "list"]
 
         do {
             let raw = try runWithTimeoutLogged(
@@ -1001,27 +984,8 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
         return (try? JSONDecoder().decode([USBMuxDevice].self, from: data)) ?? []
     }
 
-    private func usbmuxListFilterArguments(for connectionType: TunnelConnectionType?) -> [String] {
-        switch connectionType {
-        case .usb:
-            return ["--usb"]
-        case .wifi:
-            return ["--network"]
-        case nil:
-            return []
-        }
-    }
-
     private func matchesDevice(_ device: USBMuxDevice, requestedUDID: String) -> Bool {
         device.identifier == requestedUDID || device.uniqueDeviceID == requestedUDID
-    }
-
-    private func isUSBDevice(_ device: USBMuxDevice) -> Bool {
-        (device.connectionType ?? "").uppercased() == "USB"
-    }
-
-    private func isNetworkDevice(_ device: USBMuxDevice) -> Bool {
-        (device.connectionType ?? "").uppercased() == "NETWORK"
     }
 
     private func deviceDebugLabel(for device: USBMuxDevice) -> String {
@@ -1032,10 +996,7 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
     }
 
     private func resolveConnectedDeviceLabel(using cmd: [String], preferredUDID: String?) throws -> String {
-        let devices = try listConnectedDevices(
-            using: cmd,
-            connectionType: effectiveTunnelConnectionType == .usb ? .usb : nil
-        )
+        let devices = try listConnectedDevices(using: cmd)
         guard !devices.isEmpty else {
             return "Apple Device"
         }
@@ -1046,7 +1007,7 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
                 guard let preferred else { return false }
                 return $0.identifier == preferred || $0.uniqueDeviceID == preferred
             }) ??
-            devices.first(where: isUSBDevice) ??
+            devices.first(where: { ($0.connectionType ?? "").uppercased() == "USB" }) ??
             devices.first
 
         guard let picked else { return "Apple Device" }
@@ -1100,23 +1061,18 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
         ])
     }
 
-    private struct PrivilegedTunnelLaunch {
-        let helperID: String
-        let arguments: [String]
-    }
-
     private func startTunnelWithAdminPrompt(using cmd: [String], udid: String?, transport: TunnelTransport) throws {
         setStage("請求系統授權")
         let full = cmd + startTunnelArguments(transport: transport, udid: udid)
-        let launch = try preparePrivilegedTunnelLaunch(for: full)
+        let scriptURL = try preparePrivilegedTunnelWrapperScript(for: full)
+        let shellCmd = privilegedTunnelLaunchCommand(for: scriptURL)
 
-        if runWithNonInteractiveSudo(launch.arguments) {
+        if runWithNonInteractiveSudo(shellCmd) {
             appendLog("以 sudo -n 啟動管理員 tunnel")
         } else {
-            try runPrivilegedCommandWithAuthorization(launch.arguments)
+            try runPrivilegedTunnelWithAuthorization(scriptURL: scriptURL)
             appendLog("以系統授權視窗啟動管理員 tunnel (\(transport.rawValue))")
         }
-        activeTunnelHelperID = launch.helperID
         appendLog("管理員 tunnel 已啟動，等待 RSD 位址 (\(transport.rawValue))")
 
         let deadline = Date().addingTimeInterval(AppConstants.Timeouts.tunnelReady)
@@ -1179,19 +1135,6 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
         return "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
-    private func helperBinaryPath(named name: String) throws -> String {
-        guard let path = Bundle.main.path(forResource: name, ofType: nil) else {
-            throw NSError(domain: "DeviceManager", code: -1, userInfo: [
-                NSLocalizedDescriptionKey: "找不到 \(name) 執行檔"
-            ])
-        }
-        return path
-    }
-
-    private func privilegedTunnelHelperPath() throws -> String {
-        try helperBinaryPath(named: "privileged-tunnel-helper")
-    }
-
     private func ensurePrivilegedTunnelDirectory() {
         let fileManager = FileManager.default
         try? fileManager.createDirectory(
@@ -1205,49 +1148,65 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
         )
     }
 
-    private func cleanupPrivilegedTunnelArtifacts() {
+    private func cleanupPrivilegedTunnelArtifacts(removeScript: Bool = false) {
         let urls = [
             privilegedTunnelFiles.logURL,
             privilegedTunnelFiles.pidURL,
             privilegedTunnelFiles.stopURL
-        ]
+        ] + (removeScript ? [privilegedTunnelFiles.scriptURL] : [])
 
         for url in urls {
             try? FileManager.default.removeItem(at: url)
         }
     }
 
-    private func preparePrivilegedTunnelLaunch(for command: [String]) throws -> PrivilegedTunnelLaunch {
+    private func preparePrivilegedTunnelWrapperScript(for command: [String]) throws -> URL {
         ensurePrivilegedTunnelDirectory()
-        cleanupPrivilegedTunnelArtifacts()
+        cleanupPrivilegedTunnelArtifacts(removeScript: false)
         PrivilegedTunnelArtifactPreparer.prepareReadableArtifacts(files: privilegedTunnelFiles)
-        let helperID = helperRegistry.makeHelperID()
-        let recordURL = helperRegistry.prepareRecordFile(helperID: helperID)
-        let helperPath = try privilegedTunnelHelperPath()
-        let arguments = [
-            helperPath,
-            "--launch-detached",
-            recordURL.path,
-            helperSessionID,
-            privilegedTunnelFiles.logURL.path,
-            privilegedTunnelFiles.pidURL.path,
-            privilegedTunnelFiles.stopURL.path
-        ] + command
 
-        return PrivilegedTunnelLaunch(
-            helperID: helperID,
-            arguments: arguments
+        let commandLine = command.map(shellEscape).joined(separator: " ")
+        let script = """
+        #!/bin/sh
+        umask 077
+        LOG=\(shellEscape(privilegedTunnelFiles.logURL.path))
+        PIDFILE=\(shellEscape(privilegedTunnelFiles.pidURL.path))
+        STOPFILE=\(shellEscape(privilegedTunnelFiles.stopURL.path))
+        rm -f "$STOPFILE"
+        : > "$LOG"
+        \(commandLine) >> "$LOG" 2>&1 &
+        CHILD=$!
+        echo "$CHILD" > "$PIDFILE"
+        while kill -0 "$CHILD" >/dev/null 2>&1; do
+          if [ -f "$STOPFILE" ]; then
+            kill "$CHILD" >/dev/null 2>&1 || true
+            break
+          fi
+          sleep 1
+        done
+        wait "$CHILD" >/dev/null 2>&1 || true
+        rm -f "$PIDFILE" "$STOPFILE"
+        """
+
+        try script.write(to: privilegedTunnelFiles.scriptURL, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o700],
+            ofItemAtPath: privilegedTunnelFiles.scriptURL.path
         )
+        return privilegedTunnelFiles.scriptURL
     }
 
-    private func runPrivilegedCommandWithAuthorization(_ arguments: [String]) throws {
-        let command = arguments.map(shellEscape).joined(separator: " ")
+    private func privilegedTunnelLaunchCommand(for scriptURL: URL) -> String {
+        "/bin/sh " + shellEscape(scriptURL.path) + " >/dev/null 2>&1 &"
+    }
+
+    private func runPrivilegedTunnelWithAuthorization(scriptURL: URL) throws {
         let source = """
         on run argv
-            do shell script item 1 of argv with administrator privileges
+            do shell script "/bin/sh " & quoted form of item 1 of argv & " >/dev/null 2>&1 &" with administrator privileges
         end run
         """
-        _ = try run(["/usr/bin/osascript", "-e", source, command])
+        _ = try run(["/usr/bin/osascript", "-e", source, scriptURL.path])
     }
 
     private func loadPrivilegedTunnelPID() -> Int? {
@@ -1279,39 +1238,28 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
 
     private func stopPrivilegedTunnelProcessIfNeeded() {
         let fileManager = FileManager.default
-        let activeRecord = activeTunnelHelperID.flatMap(loadHelperRecord)
-        guard activeRecord?.kind == .privilegedTunnel
-                || fileManager.fileExists(atPath: privilegedTunnelFiles.pidURL.path)
+        guard fileManager.fileExists(atPath: privilegedTunnelFiles.pidURL.path)
+                || fileManager.fileExists(atPath: privilegedTunnelFiles.scriptURL.path)
                 || fileManager.fileExists(atPath: privilegedTunnelFiles.logURL.path) else {
             return
         }
 
-        let childPID = activeRecord.flatMap(resolvedChildPID(for:)) ?? loadPrivilegedTunnelPID()
+        let pid = loadPrivilegedTunnelPID()
         do {
             try requestPrivilegedTunnelStop()
             let deadline = Date().addingTimeInterval(2.0)
             while Date() < deadline {
-                if let activeRecord, !isRecordRunning(activeRecord, fallbackChildPID: childPID) {
+                if !fileManager.fileExists(atPath: privilegedTunnelFiles.pidURL.path) {
                     break
                 }
-                if activeRecord == nil && !fileManager.fileExists(atPath: privilegedTunnelFiles.pidURL.path) {
+                if let pid, !isProcessRunning(pid: pid) {
                     break
                 }
                 Thread.sleep(forTimeInterval: AppConstants.Timeouts.pollInterval)
             }
-            if let activeRecord, isRecordRunning(activeRecord, fallbackChildPID: childPID) {
-                try cleanupPrivilegedHelperRecord(activeRecord, fallbackChildPID: childPID)
-            }
         } catch {
-            appendLog("停止管理員 tunnel 失敗：\(error.localizedDescription)")
+            appendLog("寫入 stop file 失敗：\(error.localizedDescription)")
         }
-        if let activeRecord,
-           !isRecordRunning(activeRecord, fallbackChildPID: childPID) {
-            helperRegistry.unregister(helperID: activeRecord.helperID)
-        } else if let activeTunnelHelperID, activeRecord == nil {
-            helperRegistry.unregister(helperID: activeTunnelHelperID)
-        }
-        activeTunnelHelperID = nil
     }
 
     func disconnect() {
@@ -1660,18 +1608,11 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
         }
 
         try p.run()
-        activeTunnelHelperID = helperRegistry.register(
-            sessionID: helperSessionID,
-            kind: .tunnel,
-            pid: p.processIdentifier,
-            command: DeviceLogRedactor.sanitizedCommandString(p.arguments ?? [])
-        )
 
         p.terminationHandler = { [weak self] proc in
             guard let self else { return }
             out.fileHandleForReading.readabilityHandler = nil
             err.fileHandleForReading.readabilityHandler = nil
-            self.unregisterTunnelHelperIfNeeded()
             if self.rsdEndpoint != nil && !self.userInitiatedDisconnect {
                 self.handleUnexpectedConnectionLoss(reason: "tunnel 行程已結束（code: \(proc.terminationStatus)）")
             }
@@ -1750,7 +1691,6 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
         simulateLocationMode = nil
         activeTunnelConnectionType = nil
         pendingConnectionDeviceKey = nil
-        let hadDirectTunnelProcess = tunnelProcess != nil
         stopSendPipelineSynchronously()
 
         tunnelOutPipe?.fileHandleForReading.readabilityHandler = nil
@@ -1770,10 +1710,6 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
         tunnelOutPipe = nil
         tunnelErrPipe = nil
 
-        if hadDirectTunnelProcess {
-            unregisterTunnelHelperIfNeeded()
-        }
-
         stopPrivilegedTunnelProcessIfNeeded()
 
     }
@@ -1788,9 +1724,9 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
     }
 
     @discardableResult
-    private func runWithNonInteractiveSudo(_ command: [String]) -> Bool {
+    private func runWithNonInteractiveSudo(_ shellCmd: String) -> Bool {
         do {
-            _ = try run(["/usr/bin/sudo", "-n"] + command)
+            _ = try run(["/usr/bin/sudo", "-n", "/bin/sh", "-c", shellCmd])
             return true
         } catch {
             appendLog("sudo -n 不可用：\(error.localizedDescription)")
@@ -1846,153 +1782,6 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
         _ = smokeTestCLI(atPath: standalonePath, timeout: 8.0)
     }
 
-    private func startHelperCleanupIfNeeded() {
-        connectionQueue.async { [weak self] in
-            self?.recoverManagedHelperProcesses(reason: "launch")
-            self?.cleanupOrphanedHelperProcesses()
-        }
-    }
-
-    private func loadHelperRecord(_ helperID: String) -> ManagedHelperRecord? {
-        ManagedHelperRecord.load(from: helperRegistry.recordURL(for: helperID))
-    }
-
-    private func unregisterTunnelHelperIfNeeded() {
-        guard let activeTunnelHelperID else { return }
-        helperRegistry.unregister(helperID: activeTunnelHelperID)
-        self.activeTunnelHelperID = nil
-    }
-
-    private func unregisterDVTStreamHelperIfNeeded() {
-        guard let activeDVTStreamHelperID else { return }
-        helperRegistry.unregister(helperID: activeDVTStreamHelperID)
-        self.activeDVTStreamHelperID = nil
-    }
-
-    private func resolvedChildPID(for record: ManagedHelperRecord) -> Int? {
-        if let childPID = record.childPID {
-            return Int(childPID)
-        }
-        guard let pidFileURL = record.pidFileURL,
-              let raw = try? String(contentsOf: pidFileURL, encoding: .utf8) else {
-            return nil
-        }
-        return PrivilegedTunnelPIDParser.parse(raw)
-    }
-
-    private func isRecordRunning(_ record: ManagedHelperRecord, fallbackChildPID: Int? = nil) -> Bool {
-        if isProcessRunning(pid: Int(record.pid)) {
-            return true
-        }
-        if let childPID = resolvedChildPID(for: record) ?? fallbackChildPID {
-            return isProcessRunning(pid: childPID)
-        }
-        return false
-    }
-
-    private func terminateRecordedHelper(_ record: ManagedHelperRecord) {
-        if kill(record.pid, SIGTERM) == 0 {
-            appendLog("已結束殘留 helper pid=\(record.pid)")
-        }
-
-        let deadline = Date().addingTimeInterval(0.8)
-        while Date() < deadline {
-            if !isProcessRunning(pid: Int(record.pid)) {
-                return
-            }
-            Thread.sleep(forTimeInterval: 0.05)
-        }
-
-        if kill(record.pid, SIGKILL) == 0 {
-            appendLog("強制結束殘留 helper pid=\(record.pid)")
-        }
-    }
-
-    private func cleanupPrivilegedHelperRecord(
-        _ record: ManagedHelperRecord,
-        fallbackChildPID: Int? = nil
-    ) throws {
-        let helperPath = try privilegedTunnelHelperPath()
-        let childPID = resolvedChildPID(for: record) ?? fallbackChildPID ?? 0
-        let pidFilePath = record.pidFilePath ?? privilegedTunnelFiles.pidURL.path
-        let stopFilePath = record.stopFilePath ?? privilegedTunnelFiles.stopURL.path
-        let command = [
-            helperPath,
-            "--cleanup",
-            record.recordURL.path,
-            pidFilePath,
-            stopFilePath,
-            String(record.pid),
-            String(childPID)
-        ]
-
-        if runWithNonInteractiveSudo(command) {
-            appendLog("以 sudo -n 回收管理員 helper")
-        } else {
-            try runPrivilegedCommandWithAuthorization(command)
-            appendLog("以系統授權回收管理員 helper")
-        }
-    }
-
-    private func recoverManagedHelperProcesses(reason: String) {
-        let records = helperRegistry.records()
-        guard !records.isEmpty else { return }
-
-        appendLog("執行 helper session recovery：\(reason)")
-        for record in records {
-            let maskedSession = DeviceLogRedactor.maskedIdentifier(record.sessionID)
-            let label = record.kind.rawValue
-            let childPID = resolvedChildPID(for: record)
-
-            if !isRecordRunning(record, fallbackChildPID: childPID) {
-                appendLog("移除失效 helper 記錄：\(label) session=\(maskedSession)")
-                helperRegistry.unregister(helperID: record.helperID)
-                continue
-            }
-
-            appendLog("回收殘留 helper：\(label) session=\(maskedSession)")
-            switch record.kind {
-            case .privilegedTunnel:
-                do {
-                    if let stopFileURL = record.stopFileURL {
-                        try Data().write(to: stopFileURL, options: .atomic)
-                    } else {
-                        try requestPrivilegedTunnelStop()
-                    }
-
-                    let deadline = Date().addingTimeInterval(1.5)
-                    while Date() < deadline {
-                        if !isRecordRunning(record, fallbackChildPID: childPID) {
-                            break
-                        }
-                        Thread.sleep(forTimeInterval: 0.05)
-                    }
-
-                    if isRecordRunning(record, fallbackChildPID: childPID) {
-                        try cleanupPrivilegedHelperRecord(record, fallbackChildPID: childPID)
-                    }
-                } catch {
-                    appendLog("回收管理員 helper 失敗：\(error.localizedDescription)")
-                }
-            case .tunnel, .dvtStream:
-                terminateRecordedHelper(record)
-            }
-
-            if isRecordRunning(record, fallbackChildPID: childPID) {
-                appendLog("殘留 helper 尚未完全回收：\(label)")
-                continue
-            }
-
-            helperRegistry.unregister(helperID: record.helperID)
-            if activeTunnelHelperID == record.helperID {
-                activeTunnelHelperID = nil
-            }
-            if activeDVTStreamHelperID == record.helperID {
-                activeDVTStreamHelperID = nil
-            }
-        }
-    }
-
     private func setStage(_ stage: String) {
         setConnectionState(.connecting(step: stage), lastError: nil)
     }
@@ -2023,73 +1812,6 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
         runtimeLogQueue.async { [runtimeLogStore] in
             runtimeLogStore.appendLine(line)
         }
-    }
-
-    private func cleanupOrphanedHelperProcesses() {
-        let helperProcesses = orphanedHelperProcesses()
-        guard !helperProcesses.isEmpty else { return }
-
-        appendLog("發現 \(helperProcesses.count) 個殘留 helper，先清理再連線")
-        for helper in helperProcesses {
-            let maskedCommand = DeviceLogRedactor.sanitizedMessage(helper.command)
-            if kill(helper.pid, SIGTERM) == 0 {
-                appendLog("已結束殘留 helper pid=\(helper.pid)：\(maskedCommand)")
-                continue
-            }
-
-            let failure = String(cString: strerror(errno))
-            appendLog("結束殘留 helper 失敗 pid=\(helper.pid)：\(failure)")
-        }
-
-        Thread.sleep(forTimeInterval: 0.2)
-
-        for helper in helperProcesses where kill(helper.pid, 0) == 0 {
-            if kill(helper.pid, SIGKILL) == 0 {
-                appendLog("強制結束殘留 helper pid=\(helper.pid)")
-            }
-        }
-    }
-
-    private func orphanedHelperProcesses() -> [HelperProcessSnapshot] {
-        guard let output = try? run(["/bin/ps", "-axo", "pid=,ppid=,command="]) else {
-            return []
-        }
-
-        let currentPID = Int32(ProcessInfo.processInfo.processIdentifier)
-        return output
-            .components(separatedBy: .newlines)
-            .compactMap(parseHelperProcessSnapshot(from:))
-            .filter { $0.pid != currentPID }
-            .filter { $0.parentPID == 1 }
-            .filter { isManagedHelperCommand($0.command) }
-    }
-
-    private func parseHelperProcessSnapshot(from line: String) -> HelperProcessSnapshot? {
-        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-
-        let parts = trimmed.split(maxSplits: 2, whereSeparator: \.isWhitespace)
-        guard parts.count == 3,
-              let pid = Int32(parts[0]),
-              let parentPID = Int32(parts[1]) else {
-            return nil
-        }
-
-        return HelperProcessSnapshot(
-            pid: pid,
-            parentPID: parentPID,
-            command: String(parts[2])
-        )
-    }
-
-    private func isManagedHelperCommand(_ command: String) -> Bool {
-        let markers = [
-            "/O.Paperclip.app/Contents/Resources/pymobiledevice3-bundle/pymobiledevice3",
-            "/O.Paperclip.app/Contents/Resources/pymobiledevice3 ",
-            "/O.Paperclip.app/Contents/Resources/dvt-location-stream",
-            "/O.Paperclip.app/Contents/Resources/privileged-tunnel-helper"
-        ]
-        return markers.contains(where: { command.contains($0) })
     }
 
     private func runWithTimeoutLogged(_ args: [String], timeout: TimeInterval, step: String) throws -> String {
@@ -2168,18 +1890,8 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
             onError: { [weak self] text in
                 self?.appendLog("dvt-stream err: \(self?.summarizeOutput(text, maxChars: 180) ?? text)")
             },
-            onStart: { [weak self] pid in
-                guard let self else { return }
-                self.activeDVTStreamHelperID = self.helperRegistry.register(
-                    sessionID: self.helperSessionID,
-                    kind: .dvtStream,
-                    pid: pid,
-                    command: "dvt-location-stream"
-                )
-            },
             onExit: { [weak self] status in
                 guard let self else { return }
-                self.unregisterDVTStreamHelperIfNeeded()
                 self.appendLog("dvt-stream exited: \(status)")
                 if self.expectedDvtStreamExit {
                     self.expectedDvtStreamExit = false

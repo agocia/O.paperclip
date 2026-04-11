@@ -118,62 +118,6 @@ struct O_PaperclipTests {
         #expect(identifiers == ["DUPLICATED-DEVICE"])
     }
 
-    @Test func helperRegistryRoundTripsManagedRecord() throws {
-        let directoryURL = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        let registry = HelperProcessRegistry(directoryURL: directoryURL)
-
-        let helperID = registry.register(
-            sessionID: "session-123",
-            kind: .privilegedTunnel,
-            pid: 321,
-            parentPID: 654,
-            childPID: 987,
-            startedAt: "2026-04-10T00:00:00Z",
-            pidFileURL: URL(fileURLWithPath: "/tmp/helper.pid"),
-            stopFileURL: URL(fileURLWithPath: "/tmp/helper.stop"),
-            command: "privileged-tunnel-helper"
-        )
-
-        let records = registry.records()
-        #expect(records.count == 1)
-        #expect(records.first?.helperID == helperID)
-        #expect(records.first?.kind == .privilegedTunnel)
-        #expect(records.first?.pid == 321)
-        #expect(records.first?.childPID == 987)
-        #expect(records.first?.pidFilePath == "/tmp/helper.pid")
-        #expect(records.first?.stopFilePath == "/tmp/helper.stop")
-        #expect(records.first?.command == "privileged-tunnel-helper")
-
-        registry.unregister(helperID: helperID)
-        #expect(registry.records().isEmpty)
-
-        try? FileManager.default.removeItem(at: directoryURL)
-    }
-
-    @Test func managedHelperRecordParsesCommandWithEquals() throws {
-        let directoryURL = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
-        let recordURL = directoryURL.appendingPathComponent("helper.state")
-        let raw = """
-        helperID=helper
-        sessionID=session
-        kind=tunnel
-        pid=42
-        command=--flag=value
-        """
-        try raw.write(to: recordURL, atomically: true, encoding: .utf8)
-
-        let record = ManagedHelperRecord.load(from: recordURL)
-
-        #expect(record?.helperID == "helper")
-        #expect(record?.kind == .tunnel)
-        #expect(record?.command == "--flag=value")
-
-        try? FileManager.default.removeItem(at: directoryURL)
-    }
-
     @Test func parsesDirectKMLIntoOverlay() throws {
         let data = """
         <?xml version="1.0" encoding="UTF-8"?>
