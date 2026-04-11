@@ -8,7 +8,7 @@ struct StatusViewSection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             if vm.hasActiveRouteSnapshot {
-                Text(vm.isActiveSimulationRunning ? "藍線路線同步中" : "藍線路線已固定")
+                activeStatusText
                     .foregroundColor(ModernTheme.info)
             }
 
@@ -16,13 +16,19 @@ struct StatusViewSection: View {
             case .selectingA:
                 if vm.operationMode == .multiPoint {
                     Text("Shift + 點擊新增路線點（至少 2 點）").foregroundColor(ModernTheme.accent)
+                } else if vm.operationMode == .joystick {
+                    Text("Shift + 點擊設定搖桿起點").foregroundColor(ModernTheme.accent)
                 } else if vm.operationMode == .fixedPoint {
                     Text("Shift + 點擊設定定位點").foregroundColor(ModernTheme.accent)
+                } else if vm.operationMode == .fixedRoute {
+                    Text("請匯入或選擇固定路線").foregroundColor(ModernTheme.accent)
                 } else {
                     Text("Shift + 點擊設定「起點 A」").foregroundColor(ModernTheme.accent)
                 }
             case .confirmingA:
-                if vm.operationMode == .fixedPoint {
+                if vm.operationMode == .joystick {
+                    Text("已選擇搖桿起點，請在地圖標記上直接確認/取消").foregroundColor(ModernTheme.success)
+                } else if vm.operationMode == .fixedPoint {
                     Text("已選擇定位點，請在地圖標記上直接確認/取消").foregroundColor(ModernTheme.success)
                 } else {
                     Text("已選擇起點 A，請在地圖標記上直接確認/取消").foregroundColor(ModernTheme.success)
@@ -43,13 +49,53 @@ struct StatusViewSection: View {
                 }
                 .pickerStyle(.radioGroup)
             case .readyToMove:
-                Text(vm.hasActiveRouteSnapshot ? "黃色草稿已完成，可開始新路線" : "準備就緒")
+                readyStatusText
                     .foregroundColor(vm.hasActiveRouteSnapshot ? .yellow : ModernTheme.info)
             case .moving:
-                Text("移動中...").foregroundColor(ModernTheme.info)
+                movingStatusText
+                    .foregroundColor(ModernTheme.info)
             }
         }
         .font(.headline)
         .animation(.easeInOut, value: vm.appState)
+    }
+
+    private var activeStatusText: Text {
+        switch vm.activeOperationMode {
+        case .joystick:
+            return Text(vm.activeJoystickDirections.isEmpty ? "搖桿已啟用" : "搖桿同步中")
+        case .fixedPoint:
+            return Text(vm.isActiveSimulationRunning ? "定位中" : "定位已固定")
+        case .fixedRoute:
+            return Text(vm.isActiveSimulationRunning ? "固定路線同步中" : "固定路線已固定")
+        case .routeAB, .multiPoint:
+            return Text(vm.isActiveSimulationRunning ? "藍線路線同步中" : "藍線路線已固定")
+        }
+    }
+
+    private var readyStatusText: Text {
+        if vm.hasActiveRouteSnapshot {
+            return Text("黃色草稿已完成，可開始新路線")
+        }
+
+        switch vm.operationMode {
+        case .joystick:
+            return Text("搖桿已就緒，開始後可用方向鍵或 WASD 控制")
+        case .fixedRoute:
+            return Text("固定路線已就緒")
+        case .routeAB, .fixedPoint, .multiPoint:
+            return Text("準備就緒")
+        }
+    }
+
+    private var movingStatusText: Text {
+        switch vm.activeOperationMode {
+        case .joystick:
+            return Text(vm.activeJoystickDirections.isEmpty ? "搖桿已啟用，等待輸入" : "搖桿移動中...")
+        case .fixedRoute:
+            return Text("沿固定路線移動中...")
+        case .fixedPoint, .routeAB, .multiPoint:
+            return Text("移動中...")
+        }
     }
 }

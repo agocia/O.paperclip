@@ -10,7 +10,7 @@ struct MovementSettingsSectionView: View {
             VStack(alignment: .leading, spacing: 5) {
                 HStack(spacing: 8) {
                     Text("當前速度: \(String(format: "%.1f", vm.speed)) km/h")
-                    if !vm.routes.isEmpty || vm.totalRouteDistance > 0 {
+                    if !vm.routes.isEmpty || vm.draftTotalRouteDistance > 0 || vm.totalRouteDistance > 0 {
                         Text("單趟: \(vm.estimatedTime)")
                             .foregroundColor(ModernTheme.info)
                     }
@@ -36,9 +36,11 @@ struct MovementSettingsSectionView: View {
                 }
             }
 
-            Toggle("來回巡邏", isOn: $vm.isEndlessLoop)
-                .tint(ModernTheme.accent)
-                .disabled(vm.operationMode == .multiPoint && vm.isClosedLoop)
+            if vm.operationMode != .fixedPoint && vm.operationMode != .joystick {
+                Toggle("來回巡邏", isOn: $vm.isEndlessLoop)
+                    .tint(ModernTheme.accent)
+                    .disabled(vm.operationMode == .multiPoint && vm.isClosedLoop)
+            }
 
             if vm.operationMode == .multiPoint {
                 Text(

@@ -33,7 +33,24 @@ extension ContentView {
 
     @ViewBuilder
     var locationInputSection: some View {
-        LocationInputSectionView(vm: vm, currentRegion: cameraPosition.region)
+        LocationInputSectionView(
+            vm: vm,
+            currentRegion: cameraPosition.region,
+            onImportGPX: {
+                vm.resetImportedGPXRouteSession()
+                vm.gpxImportError = nil
+                isImportingGPXRoute = true
+            },
+            onUseImportedRoute: { route in
+                vm.useImportedGPXRoute(route)
+            },
+            onFocusImportedRoute: { route in
+                focusImportedGPXRoute(route)
+            },
+            onRemoveImportedRoute: { route in
+                vm.removeImportedGPXRoute(route)
+            }
+        )
     }
 
     var wirelessModeBinding: Binding<Bool> {
@@ -182,11 +199,39 @@ extension ContentView {
         }
     }
 
+    func handleGPXRouteImport(_ result: Result<[URL], Error>) {
+        switch result {
+        case .success(let urls):
+            vm.prepareImportedGPXRoutes(from: urls)
+        case .failure(let error):
+            vm.resetImportedGPXRouteSession()
+            vm.gpxImportError = error.localizedDescription
+        }
+    }
+
     func configureCameraRequestHandler() {
         vm.requestCameraPosition = { [weak vm] position in
             guard vm != nil else { return }
             cameraPosition = position
         }
+        vm.requestCameraCenter = { [weak vm] coordinate in
+            guard vm != nil else { return }
+            let span = cameraPosition.region?.span ?? MKCoordinateSpan(
+                latitudeDelta: AppConstants.Map.defaultSpanDelta,
+                longitudeDelta: AppConstants.Map.defaultSpanDelta
+            )
+            cameraPosition = .region(
+                MKCoordinateRegion(
+                    center: coordinate,
+                    span: span
+                )
+            )
+        }
+    }
+
+    func focusImportedGPXRoute(_ route: ImportedGPXRoute) {
+        guard !route.points.isEmpty else { return }
+        cameraPosition = .region(vm.mapRegion(fitting: route.points))
     }
 
     func sidebarSections(isCompactSidebar: Bool) -> some View {
@@ -268,7 +313,7 @@ extension ContentView {
                 .font(.title3)
                 .fontWeight(.semibold)
 
-            Text("將以新路線取代目前藍線路線，但不會中斷裝置連線。")
+            Text("將以新草稿取代目前運作中的同步模式，但不會中斷裝置連線。")
                 .foregroundColor(.secondary)
 
             HStack(spacing: 10) {

@@ -5,6 +5,7 @@ import AppKit
 
 struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
+    @FocusState private var isMapKeyboardFocused: Bool
 
     private enum PersistedMapKeys {
         static let centerLat = "map.center.lat"
@@ -20,6 +21,7 @@ struct ContentView: View {
     @State var purePointOverlays: [PurePointOverlay]
     @State var purePointOverlayStates: [String: PurePointOverlayUIState]
     @State var isImportingPurePointKML: Bool = false
+    @State var isImportingGPXRoute: Bool = false
     @State var purePointImportError: String?
     @State var pendingImportedOverlays: [PurePointOverlay] = []
     @State var pendingImportedOverlayTitles: [String: String] = [:]
@@ -117,6 +119,7 @@ struct ContentView: View {
         }
         .onChange(of: vm.operationMode) { _, _ in
             handleOperationModeChange()
+            requestMapKeyboardFocusIfNeeded()
         }
         .onChange(of: cameraPosition) { _, newValue in
             handleCameraPositionChange(newValue)
@@ -140,11 +143,26 @@ struct ContentView: View {
         ) { result in
             handlePurePointImport(result)
         }
+        .fileImporter(
+            isPresented: $isImportingGPXRoute,
+            allowedContentTypes: [.gpx],
+            allowsMultipleSelection: true
+        ) { result in
+            handleGPXRouteImport(result)
+        }
         .sheet(isPresented: $isShowingImportedOverlayNamingSheet) {
             importedOverlayNamingSheet
         }
         .sheet(isPresented: $isShowingPurePointRemoteApprovalSheet) {
             remoteLinkApprovalSheet
+        }
+        .sheet(
+            isPresented: Binding(
+                get: { vm.isShowingImportedGPXRouteNamingSheet },
+                set: { vm.isShowingImportedGPXRouteNamingSheet = $0 }
+            )
+        ) {
+            importedGPXRouteNamingSheet
         }
         .sheet(isPresented: routeReplacementSheetBinding) {
             routeReplacementSheet
@@ -154,6 +172,7 @@ struct ContentView: View {
         }
         .onAppear {
             configureCameraRequestHandler()
+            requestMapKeyboardFocusIfNeeded()
         }
     }
 
@@ -275,24 +294,139 @@ struct ContentView: View {
                     }
                     .mapStyle(.standard(elevation: .flat))
                     .environment(\.locale, Locale(identifier: "zh_TW"))
+                    .focusable(vm.operationMode == .joystick)
+                    .focused($isMapKeyboardFocused)
+                    .onKeyPress(phases: [.down, .repeat, .up]) { press in
+                        handleMapKeyPress(press)
+                    }
                     .onMapCameraChange(frequency: .onEnd) { context in
                         visibleMapRegion = vm.normalizeMapRegion(context.region)
                     }
                     .simultaneousGesture(
                         SpatialTapGesture()
+                            .onEnded { _ in
+                                requestMapKeyboardFocusIfNeeded()
+                            }
+                    )
+                    .simultaneousGesture(
+                        SpatialTapGesture()
                             .modifiers(EventModifiers.shift)
                             .onEnded { event in
+                                requestMapKeyboardFocusIfNeeded()
                                 if let coordinate = proxy.convert(event.location, from: .local) {
                                     vm.handleMapTap(at: coordinate)
                                 }
                             }
                     )
+                    .overlay(alignment: .topLeading) {
+                        if shouldShowJoystickFocusHint {
+                            joystickFocusHint
+                                .padding(16)
+                        }
+                    }
+                    .overlay(alignment: .bottomTrailing) {
+                        if shouldShowJoystickControlPad {
+                            JoystickControlPadView(
+                                activeDirections: vm.activeJoystickDirections,
+                                onDirectionPress: handleJoystickDirectionChange(_:isPressed:)
+                            )
+                            .padding(20)
+                        }
+                    }
                     .edgesIgnoringSafeArea(.all)
                     }
                 }
             } else {
                 Color.clear
             }
+        }
+    }
+
+    private var shouldShowJoystickControlPad: Bool {
+        vm.operationMode == .joystick
+            && vm.activeOperationMode == .joystick
+            && vm.isJoystickSessionActive
+    }
+
+    private var shouldShowJoystickFocusHint: Bool {
+        shouldShowJoystickControlPad && !isMapKeyboardFocused
+    }
+
+    private var joystickFocusHint: some View {
+        Text("點一下地圖以啟用方向鍵")
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(Color.white)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(Color.black.opacity(0.68))
+            .clipShape(Capsule())
+    }
+
+    private var importedGPXRouteNamingSheet: some View {
+        ImportedGPXRouteNamingSheet(
+            routes: vm.pendingImportedGPXRoutes,
+            titles: Binding(
+                get: { vm.pendingImportedGPXRouteTitles },
+                set: { vm.pendingImportedGPXRouteTitles = $0 }
+            ),
+            onCancel: vm.cancelImportedGPXRoutes,
+            onImport: vm.finalizeImportedGPXRoutes
+        )
+    }
+
+    private func requestMapKeyboardFocusIfNeeded() {
+        guard vm.operationMode == .joystick else { return }
+        DispatchQueue.main.async {
+            isMapKeyboardFocused = true
+        }
+    }
+
+    private func handleJoystickDirectionChange(_ direction: JoystickDirection, isPressed: Bool) {
+        requestMapKeyboardFocusIfNeeded()
+        vm.updateJoystickDirection(direction, isPressed: isPressed)
+    }
+
+    private func handleMapKeyPress(_ press: KeyPress) -> KeyPress.Result {
+        guard shouldShowJoystickControlPad, let direction = joystickDirection(for: press) else {
+            return .ignored
+        }
+
+        if press.phase == .down || press.phase == .repeat {
+            vm.updateJoystickDirection(direction, isPressed: true)
+        } else if press.phase == .up {
+            vm.updateJoystickDirection(direction, isPressed: false)
+        } else {
+            return .ignored
+        }
+
+        return .handled
+    }
+
+    private func joystickDirection(for press: KeyPress) -> JoystickDirection? {
+        switch press.key {
+        case .upArrow:
+            return .up
+        case .downArrow:
+            return .down
+        case .leftArrow:
+            return .left
+        case .rightArrow:
+            return .right
+        default:
+            break
+        }
+
+        switch press.characters.lowercased() {
+        case "w":
+            return .up
+        case "s":
+            return .down
+        case "a":
+            return .left
+        case "d":
+            return .right
+        default:
+            return nil
         }
     }
 

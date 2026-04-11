@@ -4,6 +4,8 @@ enum OperationMode: String, CaseIterable, Identifiable {
     case routeAB = "A-B"
     case fixedPoint = "定點"
     case multiPoint = "多點"
+    case joystick = "搖桿"
+    case fixedRoute = "固定路線"
 
     var id: String { rawValue }
 }
@@ -66,5 +68,4 @@ enum DeviceConnectionState: Equatable {
         return "正在連線"
     }
 }
-
 

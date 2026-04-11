@@ -4,8 +4,26 @@ import MapKit
 struct LocationInputSectionView: View {
     @Bindable var vm: AppViewModel
     let currentRegion: MKCoordinateRegion?
+    let onImportGPX: () -> Void
+    let onUseImportedRoute: (ImportedGPXRoute) -> Void
+    let onFocusImportedRoute: (ImportedGPXRoute) -> Void
+    let onRemoveImportedRoute: (ImportedGPXRoute) -> Void
 
     var body: some View {
+        if vm.operationMode == .fixedRoute {
+            ImportedGPXRouteSectionView(
+                vm: vm,
+                onImport: onImportGPX,
+                onUse: onUseImportedRoute,
+                onFocus: onFocusImportedRoute,
+                onRemove: onRemoveImportedRoute
+            )
+        } else {
+            standardLocationInputSection
+        }
+    }
+
+    private var standardLocationInputSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("位置輸入").font(.subheadline).fontWeight(.semibold).foregroundColor(ModernTheme.label)
 

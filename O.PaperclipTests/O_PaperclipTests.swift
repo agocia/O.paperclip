@@ -10,6 +10,7 @@ private final class MockDeviceManager: DeviceControlling {
     var connectionState: DeviceConnectionState = .disconnected
     var logEntries: [String] { debugLog }
     var lastSentCoordinate: CLLocationCoordinate2D?
+    var sentCoordinates: [CLLocationCoordinate2D] = []
     var debugLog: [String] = []
     var isConnected: Bool = false
     var isConnecting: Bool = false
@@ -20,19 +21,34 @@ private final class MockDeviceManager: DeviceControlling {
     var manualRsdPort: String = ""
     var tunnelUDID: String = ""
     var isWirelessMode: Bool = false
+    var startContinuousLocationStreamCallCount: Int = 0
+    var stopContinuousLocationStreamCallCount: Int = 0
+    var clearSimulatedLocationCallCount: Int = 0
 
     func connect() {}
     func connectDevice() {}
     func disconnect() {}
     func sendCoordinate(latitude: Double, longitude: Double) {}
-    func sendLocationToDevice(latitude: Double, longitude: Double) {}
-    func startContinuousLocationStream() {}
-    func stopContinuousLocationStream() {}
-    func clearSimulatedLocation() {}
+    func sendLocationToDevice(latitude: Double, longitude: Double) {
+        let coordinate = CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
+        lastSentCoordinate = coordinate
+        sentCoordinates.append(coordinate)
+    }
+    func startContinuousLocationStream() {
+        startContinuousLocationStreamCallCount += 1
+    }
+    func stopContinuousLocationStream() {
+        stopContinuousLocationStreamCallCount += 1
+    }
+    func clearSimulatedLocation() {
+        clearSimulatedLocationCallCount += 1
+    }
     func connectDeviceAsync() async throws {}
     func disconnectAsync() async {}
     func sendLocationToDeviceAsync(latitude: Double, longitude: Double) async throws {}
-    func clearSimulatedLocationAsync() async throws {}
+    func clearSimulatedLocationAsync() async throws {
+        clearSimulatedLocationCallCount += 1
+    }
 }
 
 @MainActor
@@ -532,5 +548,262 @@ struct O_PaperclipTests {
 
         #expect(vm.appState == .selectingA)
         #expect(vm.locationInputError == "第 1 段路線計算失敗，請調整選點後再試。")
+    }
+
+    @Test func joystickMotionEngineNormalizesDiagonalVector() {
+        let vector = JoystickMotionEngine.normalizedVector(for: [.up, .right])
+
+        #expect(abs(vector.dx - 0.7071067) < 0.0001)
+        #expect(abs(vector.dy - 0.7071067) < 0.0001)
+        #expect(abs(hypot(vector.dx, vector.dy) - 1.0) < 0.0001)
+    }
+
+    @Test func joystickMotionEngineEastMovementUsesLatitude() {
+        let equator = CLLocationCoordinate2D(latitude: 0, longitude: 0)
+        let highLatitude = CLLocationCoordinate2D(latitude: 60, longitude: 0)
+
+        let equatorMoved = JoystickMotionEngine.translatedCoordinate(from: equator, northMeters: 0, eastMeters: 10)
+        let highLatitudeMoved = JoystickMotionEngine.translatedCoordinate(from: highLatitude, northMeters: 0, eastMeters: 10)
+
+        #expect(abs(equatorMoved.longitude) > 0)
+        #expect(abs(highLatitudeMoved.longitude) > abs(equatorMoved.longitude))
+    }
+
+    @Test func gpxParserReadsTracksAndRoutes() throws {
+        let data = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <gpx version="1.1">
+          <trk>
+            <name>河濱軌跡</name>
+            <trkseg>
+              <trkpt lat="25.0330" lon="121.5654" />
+              <trkpt lat="25.0340" lon="121.5664" />
+            </trkseg>
+            <trkseg>
+              <trkpt lat="25.0350" lon="121.5674" />
+            </trkseg>
+          </trk>
+          <rte>
+            <name>巷弄路線</name>
+            <rtept lat="25.0400" lon="121.5700" />
+            <rtept lat="25.0410" lon="121.5710" />
+          </rte>
+        </gpx>
+        """.data(using: .utf8)!
+
+        let routes = try GPXRouteParser.parse(
+            data: data,
+            fallbackTitle: "fallback",
+            sourceName: "route.gpx",
+            stableIDPrefix: "preview-test",
+            sourceFilePath: "/tmp/route.gpx"
+        )
+
+        #expect(routes.count == 2)
+        #expect(routes[0].title == "河濱軌跡")
+        #expect(routes[0].points.count == 3)
+        #expect(routes[1].title == "巷弄路線")
+        #expect(routes[1].points.count == 2)
+    }
+
+    @Test func gpxParserIgnoresRoutesWithTooFewPoints() throws {
+        let data = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <gpx version="1.1">
+          <trk>
+            <name>短路線</name>
+            <trkseg>
+              <trkpt lat="25.0330" lon="121.5654" />
+            </trkseg>
+          </trk>
+          <rte>
+            <rtept lat="25.0400" lon="121.5700" />
+            <rtept lat="25.0410" lon="121.5710" />
+          </rte>
+        </gpx>
+        """.data(using: .utf8)!
+
+        let routes = try GPXRouteParser.parse(
+            data: data,
+            fallbackTitle: "fallback",
+            sourceName: "route.gpx",
+            stableIDPrefix: "preview-test",
+            sourceFilePath: "/tmp/route.gpx"
+        )
+
+        #expect(routes.count == 1)
+        #expect(routes[0].points.count == 2)
+    }
+
+    @Test func importedGPXRouteStorePersistsAndReloadsRoutes() throws {
+        ImportedGPXRouteStore.savePaths([])
+        ImportedGPXRouteStore.saveTitleOverrides([:])
+
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer {
+            ImportedGPXRouteStore.savePaths([])
+            ImportedGPXRouteStore.saveTitleOverrides([:])
+            try? FileManager.default.removeItem(at: tempDir)
+        }
+
+        let gpxURL = tempDir.appendingPathComponent("sample.gpx")
+        try """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <gpx version="1.1">
+          <trk>
+            <name>測試固定路線</name>
+            <trkseg>
+              <trkpt lat="25.0330" lon="121.5654" />
+              <trkpt lat="25.0340" lon="121.5664" />
+            </trkseg>
+          </trk>
+        </gpx>
+        """.write(to: gpxURL, atomically: true, encoding: .utf8)
+
+        let previewRoutes = try ImportedGPXRouteStore.previewRoutes(from: [gpxURL])
+        let persistedRoutes = try ImportedGPXRouteStore.persistImportedRoutes([
+            previewRoutes[0].renamed(to: "自訂固定路線")
+        ])
+
+        let storedPaths = persistedRoutes.compactMap(\.sourceFilePath)
+        ImportedGPXRouteStore.savePaths(storedPaths)
+        ImportedGPXRouteStore.saveTitleOverrides(Dictionary(uniqueKeysWithValues: storedPaths.map { ($0, "自訂固定路線") }))
+
+        let loadedRoutes = ImportedGPXRouteStore.loadRoutes()
+
+        #expect(loadedRoutes.count == 1)
+        #expect(loadedRoutes[0].title == "自訂固定路線")
+        #expect(loadedRoutes[0].points.count == 2)
+
+        persistedRoutes.compactMap(\.sourceFilePath).forEach {
+            try? FileManager.default.removeItem(at: URL(fileURLWithPath: $0))
+        }
+    }
+
+    @MainActor
+    @Test func joystickSessionMovesAndStopsAtPinnedLocation() {
+        let deviceManager = MockDeviceManager()
+        deviceManager.isConnected = true
+
+        let vm = AppViewModel(
+            deviceManager: deviceManager,
+            locationSearchService: MockLocationSearchService()
+        )
+
+        let start = CLLocationCoordinate2D(latitude: 25.0330, longitude: 121.5654)
+        vm.operationMode = .joystick
+        vm.insertPoint(start)
+        vm.handleMainAction()
+
+        #expect(vm.activeOperationMode == .joystick)
+        #expect(vm.isJoystickSessionActive)
+        #expect(vm.currentPosition?.latitude == start.latitude)
+
+        vm.updateJoystickDirection(.up, isPressed: true)
+        vm.stepJoystickMovement(elapsedTime: AppConstants.Simulation.joystickTimerInterval)
+
+        let moved = vm.currentPosition
+        #expect(vm.appState == .moving)
+        #expect((moved?.latitude ?? 0) > start.latitude)
+
+        vm.updateJoystickDirection(.up, isPressed: false)
+        let stopped = vm.currentPosition
+        vm.stepJoystickMovement(elapsedTime: AppConstants.Simulation.joystickTimerInterval)
+
+        #expect(vm.appState == .readyToMove)
+        #expect(abs((vm.currentPosition?.latitude ?? 0) - (stopped?.latitude ?? 0)) < 0.0000001)
+    }
+
+    @MainActor
+    @Test func endingJoystickSessionClearsActiveState() {
+        let deviceManager = MockDeviceManager()
+        deviceManager.isConnected = true
+
+        let vm = AppViewModel(
+            deviceManager: deviceManager,
+            locationSearchService: MockLocationSearchService()
+        )
+
+        vm.operationMode = .joystick
+        vm.insertPoint(CLLocationCoordinate2D(latitude: 25.0330, longitude: 121.5654))
+        vm.handleMainAction()
+        vm.handleMainAction()
+
+        #expect(!vm.isJoystickSessionActive)
+        #expect(vm.currentPosition == nil)
+        #expect(vm.appState == .selectingA)
+        #expect(deviceManager.clearSimulatedLocationCallCount == 1)
+    }
+
+    @MainActor
+    @Test func selectingImportedGPXRouteBuildsDraftAndUsesReplacementFlow() {
+        let deviceManager = MockDeviceManager()
+        deviceManager.isConnected = true
+
+        let vm = AppViewModel(
+            deviceManager: deviceManager,
+            locationSearchService: MockLocationSearchService()
+        )
+
+        vm.operationMode = .joystick
+        vm.insertPoint(CLLocationCoordinate2D(latitude: 25.0330, longitude: 121.5654))
+        vm.handleMainAction()
+
+        let route = ImportedGPXRoute(
+            id: "preview-route",
+            title: "固定路線",
+            sourceName: "sample.gpx",
+            points: [
+                CLLocationCoordinate2D(latitude: 25.0400, longitude: 121.5700),
+                CLLocationCoordinate2D(latitude: 25.0410, longitude: 121.5710)
+            ],
+            totalDistance: 150,
+            sourceFilePath: "/tmp/sample.gpx",
+            sourceRouteID: "trk-0"
+        )
+
+        vm.operationMode = .fixedRoute
+        vm.useImportedGPXRoute(route)
+
+        #expect(vm.selectedImportedGPXRouteID == route.id)
+        #expect(vm.draftRoutePoints.count == 2)
+        #expect(vm.appState == .readyToMove)
+
+        vm.handleMainAction()
+
+        #expect(vm.isShowingRouteReplacementConfirmation)
+    }
+
+    @MainActor
+    @Test func importedGPXRouteCanStartSimulation() {
+        let deviceManager = MockDeviceManager()
+        deviceManager.isConnected = true
+
+        let vm = AppViewModel(
+            deviceManager: deviceManager,
+            locationSearchService: MockLocationSearchService()
+        )
+
+        let route = ImportedGPXRoute(
+            id: "preview-route",
+            title: "固定路線",
+            sourceName: "sample.gpx",
+            points: [
+                CLLocationCoordinate2D(latitude: 25.0400, longitude: 121.5700),
+                CLLocationCoordinate2D(latitude: 25.0410, longitude: 121.5710)
+            ],
+            totalDistance: 150,
+            sourceFilePath: "/tmp/sample.gpx",
+            sourceRouteID: "trk-0"
+        )
+
+        vm.operationMode = .fixedRoute
+        vm.useImportedGPXRoute(route)
+        vm.handleMainAction()
+
+        #expect(vm.activeOperationMode == .fixedRoute)
+        #expect(vm.isActiveSimulationRunning)
+        #expect(vm.activeRoutePolyline != nil)
     }
 }

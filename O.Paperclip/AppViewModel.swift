@@ -68,13 +68,23 @@ final class AppViewModel {
     var activeIsClosedLoop: Bool = false
     var activeIsEndlessLoop: Bool = false
     var isActiveSimulationRunning: Bool = false
+    var isJoystickSessionActive: Bool = false
     var shouldResumeActiveAfterReconnect: Bool = false
     var isShowingRouteReplacementConfirmation: Bool = false
+    private(set) var activeJoystickDirections: Set<JoystickDirection> = []
 
     // MARK: - Settings
     var speed: Double = AppConstants.Simulation.defaultSpeed
     var isEndlessLoop: Bool = false
     var isClosedLoop: Bool = false
+
+    // MARK: - Fixed routes
+    var importedGPXRoutes: [ImportedGPXRoute] = ImportedGPXRouteStore.loadRoutes()
+    var selectedImportedGPXRouteID: String?
+    var pendingImportedGPXRoutes: [ImportedGPXRoute] = []
+    var pendingImportedGPXRouteTitles: [String: String] = [:]
+    var isShowingImportedGPXRouteNamingSheet: Bool = false
+    var gpxImportError: String?
 
     // MARK: - Location input
     var placeKeyword: String = ""
@@ -84,9 +94,11 @@ final class AppViewModel {
 
     // MARK: - Map camera
     var requestCameraPosition: ((MapCameraPosition) -> Void)?
+    var requestCameraCenter: ((CLLocationCoordinate2D) -> Void)?
 
     // MARK: - Private
     @ObservationIgnored private var moveTimer: Timer?
+    @ObservationIgnored private var joystickTimer: Timer?
     @ObservationIgnored private var pinnedKeepAliveTimer: Timer?
     @ObservationIgnored private var cancellables: Set<AnyCancellable> = []
     private(set) var lastSentPosition: CLLocationCoordinate2D?
@@ -99,12 +111,18 @@ final class AppViewModel {
         routes.indices.contains(selectedRouteIndex) ? routes[selectedRouteIndex] : routes.first
     }
 
+    var selectedImportedGPXRoute: ImportedGPXRoute? {
+        importedGPXRoutes.first { $0.id == selectedImportedGPXRouteID }
+    }
+
     var pinnedCoordinate: CLLocationCoordinate2D? {
         currentPosition ?? lastSentPosition
     }
 
     var hasActiveRouteSnapshot: Bool {
-        activeRoutePolyline != nil || (activeOperationMode == .fixedPoint && currentPosition != nil)
+        activeRoutePolyline != nil
+            || ((activeOperationMode == .fixedPoint || activeOperationMode == .joystick) && currentPosition != nil)
+            || (isJoystickSessionActive && currentPosition != nil)
     }
 
     var hasDraftPreview: Bool {
@@ -114,8 +132,7 @@ final class AppViewModel {
     }
 
     var hasDraftEdits: Bool {
-        appState != .selectingA
-            || pointA != nil
+        pointA != nil
             || pointB != nil
             || tempCoordinate != nil
             || !waypoints.isEmpty
@@ -125,9 +142,9 @@ final class AppViewModel {
     var hasReadyDraft: Bool {
         guard appState == .readyToMove else { return false }
         switch operationMode {
-        case .fixedPoint:
+        case .fixedPoint, .joystick:
             return pointA != nil
-        case .routeAB, .multiPoint:
+        case .routeAB, .multiPoint, .fixedRoute:
             return draftRoutePoints.count > 1
         }
     }
@@ -144,12 +161,27 @@ final class AppViewModel {
         if hasActiveRouteSnapshot {
             return "清除草稿路線"
         }
-        return operationMode == .fixedPoint ? "清除定位點" : "清除目前路線"
+        switch operationMode {
+        case .fixedPoint:
+            return "清除定位點"
+        case .joystick:
+            return "清除搖桿起點"
+        case .fixedRoute:
+            return "清除固定路線"
+        case .routeAB, .multiPoint:
+            return "清除目前路線"
+        }
     }
 
     var activityNotice: String? {
         if hasActiveRouteSnapshot && hasDraftEdits {
             return "目前藍線持續運作中，正在編輯黃線草稿。"
+        }
+        if activeOperationMode == .joystick && isJoystickSessionActive && !activeJoystickDirections.isEmpty {
+            return "搖桿同步中，放開方向鍵後會停在目前位置。"
+        }
+        if activeOperationMode == .joystick && isJoystickSessionActive {
+            return "搖桿已啟用，按方向鍵、WASD 或右下角方向鈕即可移動。"
         }
         if hasActiveRouteSnapshot && !isActiveSimulationRunning {
             return "目前藍線已停止移動，但定位仍固定在裝置上。"
@@ -194,7 +226,7 @@ final class AppViewModel {
     }
 
     var isMainActionDestructive: Bool {
-        !shouldUseDraftControls && isActiveSimulationRunning
+        !shouldUseDraftControls && (isActiveSimulationRunning || activeOperationMode == .joystick)
     }
 
     private var draftButtonTitle: String {
@@ -202,6 +234,20 @@ final class AppViewModel {
             switch appState {
             case .selectingA, .confirmingA: return "選擇定位點"
             case .readyToMove: return "開始定位"
+            default: break
+            }
+        }
+        if operationMode == .joystick {
+            switch appState {
+            case .selectingA, .confirmingA: return "選擇起點"
+            case .readyToMove: return hasActiveRouteSnapshot ? "開始新路線" : "開始搖桿"
+            default: break
+            }
+        }
+        if operationMode == .fixedRoute {
+            switch appState {
+            case .selectingA: return "匯入或選擇路線"
+            case .readyToMove: return hasActiveRouteSnapshot ? "開始新路線" : "開始同步移動"
             default: break
             }
         }
@@ -223,6 +269,9 @@ final class AppViewModel {
         if activeOperationMode == .fixedPoint {
             return isActiveSimulationRunning ? "停止定位(回歸裝置定位）" : "開始定位"
         }
+        if activeOperationMode == .joystick {
+            return "結束搖桿"
+        }
         return isActiveSimulationRunning ? "停止移動" : "開始同步移動"
     }
 
@@ -236,7 +285,8 @@ final class AppViewModel {
         if operationMode == .multiPoint && appState == .selectingA {
             return waypoints.count < 2
         }
-        if operationMode == .fixedPoint && (appState == .selectingA || appState == .confirmingA) {
+        if (operationMode == .fixedPoint || operationMode == .joystick)
+            && (appState == .selectingA || appState == .confirmingA) {
             return pointA == nil && tempCoordinate == nil
         }
         if appState == .selectingA {
@@ -279,6 +329,12 @@ final class AppViewModel {
     // MARK: - Map interaction
 
     func handleMapTap(at coordinate: CLLocationCoordinate2D) {
+        if hasActiveRouteSnapshot && !hasDraftEdits && operationMode != .fixedRoute {
+            appState = .selectingA
+        }
+        if operationMode == .fixedRoute {
+            return
+        }
         if operationMode == .multiPoint {
             guard appState == .selectingA else { return }
             waypoints.append(coordinate)
@@ -301,6 +357,9 @@ final class AppViewModel {
         locationInputError = nil
         placeResults = []
         locationSearchService.clearSuggestions()
+        if hasActiveRouteSnapshot && !hasDraftEdits && operationMode != .fixedRoute {
+            appState = .selectingA
+        }
         requestCameraPosition?(.region(
             MKCoordinateRegion(
                 center: coordinate,
@@ -316,7 +375,11 @@ final class AppViewModel {
             return
         }
 
-        if operationMode == .fixedPoint {
+        if operationMode == .fixedRoute {
+            return
+        }
+
+        if operationMode == .fixedPoint || operationMode == .joystick {
             pointA = coordinate
             tempCoordinate = nil
             appState = .readyToMove
@@ -387,6 +450,123 @@ final class AppViewModel {
         }
     }
 
+    // MARK: - GPX routes
+
+    func prepareImportedGPXRoutes(from urls: [URL]) {
+        guard !urls.isEmpty else { return }
+        resetImportedGPXRouteSession()
+
+        do {
+            pendingImportedGPXRoutes = try ImportedGPXRouteStore.previewRoutes(from: urls)
+            pendingImportedGPXRouteTitles = [String: String](
+                uniqueKeysWithValues: pendingImportedGPXRoutes.map { ($0.id, $0.title) }
+            )
+            isShowingImportedGPXRouteNamingSheet = true
+            gpxImportError = nil
+        } catch let error as GPXImportError {
+            gpxImportError = error.localizedDescription
+        } catch {
+            gpxImportError = error.localizedDescription
+        }
+    }
+
+    func finalizeImportedGPXRoutes() {
+        do {
+            let renamedRoutes = pendingImportedGPXRoutes.map { route in
+                route.renamed(to: pendingImportedGPXRouteTitles[route.id] ?? route.title)
+            }
+            let persistedRoutes = try ImportedGPXRouteStore.persistImportedRoutes(renamedRoutes)
+            commitImportedGPXRoutes(persistedRoutes)
+            gpxImportError = nil
+            resetImportedGPXRouteSession()
+        } catch let error as GPXImportError {
+            gpxImportError = error.localizedDescription
+        } catch {
+            gpxImportError = error.localizedDescription
+        }
+    }
+
+    func cancelImportedGPXRoutes() {
+        resetImportedGPXRouteSession()
+    }
+
+    func useImportedGPXRoute(_ route: ImportedGPXRoute) {
+        let normalized = normalizeRoutePoints(route.points)
+        guard normalized.count > 1 else {
+            locationInputError = "固定路線資料異常，請重新匯入。"
+            return
+        }
+
+        pointA = nil
+        pointB = nil
+        tempCoordinate = nil
+        waypoints = []
+        routes = []
+        selectedRouteIndex = 0
+        customRoutePolyline = nil
+        selectedImportedGPXRouteID = route.id
+        draftRoutePoints = normalized
+        draftCumulativeRouteDistances = RouteMotionEngine.cumulativeDistances(for: normalized)
+        draftTotalRouteDistance = route.totalDistance > 0
+            ? route.totalDistance
+            : (draftCumulativeRouteDistances.last ?? 0)
+        var coords = normalized
+        customRoutePolyline = MKPolyline(coordinates: &coords, count: coords.count)
+        locationInputError = nil
+        appState = .readyToMove
+    }
+
+    func removeImportedGPXRoute(_ route: ImportedGPXRoute) {
+        ImportedGPXRouteStore.deleteStoredRoute(route)
+        importedGPXRoutes.removeAll { $0.id == route.id }
+
+        if selectedImportedGPXRouteID == route.id {
+            selectedImportedGPXRouteID = nil
+            clearDraftGeometry()
+            if !hasActiveRouteSnapshot {
+                appState = .selectingA
+            }
+        }
+
+        persistImportedGPXRouteSettings()
+    }
+
+    func persistImportedGPXRouteSettings() {
+        let paths = importedGPXRoutes.compactMap(\.sourceFilePath)
+        let titles = importedGPXRoutes.reduce(into: [String: String]()) { partialResult, route in
+            guard let path = route.sourceFilePath else { return }
+            partialResult[path] = route.title
+        }
+        ImportedGPXRouteStore.savePaths(paths)
+        ImportedGPXRouteStore.saveTitleOverrides(titles)
+    }
+
+    func resetImportedGPXRouteSession() {
+        pendingImportedGPXRoutes = []
+        pendingImportedGPXRouteTitles = [:]
+        isShowingImportedGPXRouteNamingSheet = false
+    }
+
+    private func commitImportedGPXRoutes(_ routes: [ImportedGPXRoute]) {
+        var routesByPath: [String: ImportedGPXRoute] = Dictionary(
+            uniqueKeysWithValues: importedGPXRoutes.compactMap { route in
+                guard let path = route.sourceFilePath else { return nil }
+                return (path, route)
+            }
+        )
+
+        for route in routes {
+            if let path = route.sourceFilePath {
+                routesByPath[path] = route
+            }
+        }
+
+        importedGPXRoutes = routesByPath.values.sorted {
+            $0.title.localizedStandardCompare($1.title) == .orderedAscending
+        }
+        persistImportedGPXRouteSettings()
+    }
+
     // MARK: - Main action
 
     func handleMainAction() {
@@ -402,7 +582,11 @@ final class AppViewModel {
         guard deviceManager.isConnected else { return }
         stopSimulation(keepPinned: false)
         activateDraftForActiveSession()
-        startSimulation()
+        if activeOperationMode == .joystick {
+            beginJoystickSession()
+        } else {
+            startSimulation()
+        }
     }
 
     func cancelRouteReplacement() {
@@ -437,7 +621,11 @@ final class AppViewModel {
                 isShowingRouteReplacementConfirmation = true
             } else {
                 activateDraftForActiveSession()
-                startSimulation()
+                if activeOperationMode == .joystick {
+                    beginJoystickSession()
+                } else {
+                    startSimulation()
+                }
             }
         case .moving:
             break
@@ -449,6 +637,11 @@ final class AppViewModel {
     private func handleActiveMainAction() {
         guard hasActiveRouteSnapshot else { return }
         guard deviceManager.isConnected else { return }
+
+        if activeOperationMode == .joystick {
+            endJoystickSession()
+            return
+        }
 
         if activeOperationMode == .fixedPoint {
             if isActiveSimulationRunning {
@@ -469,13 +662,14 @@ final class AppViewModel {
     }
 
     private func activateDraftForActiveSession() {
+        stopJoystickMovement()
         activeOperationMode = operationMode
         activeIsClosedLoop = isClosedLoop
         activeIsEndlessLoop = isEndlessLoop
         shouldResumeActiveAfterReconnect = false
 
         switch operationMode {
-        case .fixedPoint:
+        case .fixedPoint, .joystick:
             guard let fixed = pointA else { return }
             currentPosition = fixed
             currentRoutePoints = []
@@ -483,7 +677,8 @@ final class AppViewModel {
             traveledDistance = 0
             totalRouteDistance = 0
             activeRoutePolyline = nil
-        case .routeAB, .multiPoint:
+            isJoystickSessionActive = operationMode == .joystick
+        case .routeAB, .multiPoint, .fixedRoute:
             guard draftRoutePoints.count > 1 else { return }
             currentRoutePoints = draftRoutePoints
             cumulativeRouteDistances = draftCumulativeRouteDistances
@@ -491,9 +686,11 @@ final class AppViewModel {
             totalRouteDistance = draftTotalRouteDistance
             currentPosition = draftRoutePoints.first
             activeRoutePolyline = makeDraftPolyline()
+            isJoystickSessionActive = false
         }
 
         clearDraftWorkflow()
+        appState = .readyToMove
     }
 
     // MARK: - Coordinate helpers
@@ -504,7 +701,7 @@ final class AppViewModel {
         case .confirmingA:
             pointA = temp
             tempCoordinate = nil
-            if operationMode == .fixedPoint {
+            if operationMode == .fixedPoint || operationMode == .joystick {
                 appState = .readyToMove
             } else {
                 appState = .selectingB
@@ -671,12 +868,16 @@ final class AppViewModel {
 
     func startSimulation() {
         stopPinnedLocationKeepAlive()
+        stopJoystickMovement()
         isActiveSimulationRunning = true
         shouldResumeActiveAfterReconnect = false
+        appState = .moving
+        resetSendTracking()
 
         if activeOperationMode == .fixedPoint {
             guard let fixed = currentPosition else {
                 isActiveSimulationRunning = false
+                appState = .readyToMove
                 return
             }
             startStreamingAndSend(fixed)
@@ -685,6 +886,7 @@ final class AppViewModel {
 
         guard currentRoutePoints.count > 1 else {
             isActiveSimulationRunning = false
+            appState = .readyToMove
             return
         }
 
@@ -744,14 +946,87 @@ final class AppViewModel {
         moveTimer?.invalidate()
         moveTimer = nil
         isActiveSimulationRunning = false
-        lastSentPosition = nil
-        lastSentAt = nil
+        resetSendTracking()
         if keepPinned, let current = currentPosition {
             startStreamingAndSend(current)
             startPinnedLocationKeepAlive()
         } else {
             stopPinnedLocationKeepAlive()
             deviceManager.stopContinuousLocationStream()
+        }
+        if hasActiveRouteSnapshot {
+            appState = .readyToMove
+        } else if !hasDraftEdits {
+            appState = .selectingA
+        }
+    }
+
+    func beginJoystickSession() {
+        guard activeOperationMode == .joystick, let current = currentPosition else { return }
+
+        isJoystickSessionActive = true
+        shouldResumeActiveAfterReconnect = false
+        activeJoystickDirections.removeAll()
+        stopJoystickMovement()
+        resetSendTracking()
+        startStreamingAndSend(current)
+        startPinnedLocationKeepAlive()
+        requestCameraCenter?(current)
+        appState = .readyToMove
+    }
+
+    func endJoystickSession() {
+        stopJoystickMovement()
+        stopPinnedLocationKeepAlive()
+        deviceManager.stopContinuousLocationStream()
+        clearSimulatedLocationAsync()
+        clearActiveSnapshot(clearPosition: true)
+        if !hasDraftEdits {
+            appState = .selectingA
+        }
+    }
+
+    func updateJoystickDirection(_ direction: JoystickDirection, isPressed: Bool) {
+        guard isJoystickSessionActive, activeOperationMode == .joystick, currentPosition != nil else { return }
+
+        if isPressed {
+            let inserted = activeJoystickDirections.insert(direction).inserted
+            if inserted || joystickTimer == nil {
+                startJoystickMovementIfNeeded()
+            }
+            return
+        }
+
+        activeJoystickDirections.remove(direction)
+        if activeJoystickDirections.isEmpty {
+            stopJoystickMovement()
+            if let current = currentPosition {
+                startStreamingAndSend(current, updateLastSent: false)
+                startPinnedLocationKeepAlive()
+            }
+            appState = .readyToMove
+        }
+    }
+
+    func stepJoystickMovement(elapsedTime: TimeInterval) {
+        guard activeOperationMode == .joystick,
+              isJoystickSessionActive,
+              !activeJoystickDirections.isEmpty,
+              let current = currentPosition else { return }
+
+        let speedMetersPerSecond = speed * (1000.0 / 3600.0)
+        let distanceMeters = speedMetersPerSecond * elapsedTime
+        let newPosition = JoystickMotionEngine.coordinate(
+            from: current,
+            directions: activeJoystickDirections,
+            distanceMeters: distanceMeters
+        )
+
+        currentPosition = newPosition
+        requestCameraCenter?(newPosition)
+
+        if shouldSendJoystickCoordinateUpdate(newPosition) {
+            sendCoordinateAsync(newPosition)
         }
     }
 
@@ -780,18 +1055,43 @@ final class AppViewModel {
     }
 
     private func clearSimulatedLocationAsync() {
-        Task {
-            try? await deviceManager.clearSimulatedLocationAsync()
+        deviceManager.clearSimulatedLocation()
+    }
+
+    private func startJoystickMovementIfNeeded() {
+        guard joystickTimer == nil, !activeJoystickDirections.isEmpty else {
+            appState = .moving
+            return
         }
+
+        stopPinnedLocationKeepAlive()
+        appState = .moving
+        let timerInterval = AppConstants.Simulation.joystickTimerInterval
+        let timer = Timer(timeInterval: timerInterval, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.stepJoystickMovement(elapsedTime: timerInterval)
+            }
+        }
+        joystickTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    private func stopJoystickMovement() {
+        joystickTimer?.invalidate()
+        joystickTimer = nil
+        activeJoystickDirections.removeAll()
+    }
+
+    private func resetSendTracking() {
+        lastSentPosition = nil
+        lastSentAt = nil
     }
 
     private func sendCoordinateAsync(_ coordinate: CLLocationCoordinate2D, updateLastSent: Bool = true) {
         deviceManager.sendLocationToDevice(latitude: coordinate.latitude, longitude: coordinate.longitude)
         if updateLastSent {
-            Task { @MainActor in
-                self.lastSentPosition = coordinate
-                self.lastSentAt = Date()
-            }
+            lastSentPosition = coordinate
+            lastSentAt = Date()
         }
     }
 
@@ -801,13 +1101,33 @@ final class AppViewModel {
     }
 
     func shouldSendCoordinateUpdate(_ coordinate: CLLocationCoordinate2D) -> Bool {
-        if let lastAt = lastSentAt, Date().timeIntervalSince(lastAt) >= AppConstants.Simulation.minimumTimeInterval {
+        shouldSendCoordinateUpdate(
+            coordinate,
+            minimumDistance: AppConstants.Simulation.minimumDistance,
+            minimumTimeInterval: AppConstants.Simulation.minimumTimeInterval
+        )
+    }
+
+    func shouldSendJoystickCoordinateUpdate(_ coordinate: CLLocationCoordinate2D) -> Bool {
+        shouldSendCoordinateUpdate(
+            coordinate,
+            minimumDistance: AppConstants.Simulation.joystickMinimumDistance,
+            minimumTimeInterval: AppConstants.Simulation.joystickMinimumTimeInterval
+        )
+    }
+
+    private func shouldSendCoordinateUpdate(
+        _ coordinate: CLLocationCoordinate2D,
+        minimumDistance: CLLocationDistance,
+        minimumTimeInterval: TimeInterval
+    ) -> Bool {
+        if let lastAt = lastSentAt, Date().timeIntervalSince(lastAt) >= minimumTimeInterval {
             return true
         }
         guard let last = lastSentPosition else { return true }
         let a = CLLocation(latitude: last.latitude, longitude: last.longitude)
         let b = CLLocation(latitude: coordinate.latitude, longitude: coordinate.longitude)
-        return a.distance(from: b) >= AppConstants.Simulation.minimumDistance
+        return a.distance(from: b) >= minimumDistance
     }
 
     // MARK: - Draft / active state
@@ -831,32 +1151,57 @@ final class AppViewModel {
         guard deviceManager.isConnected else { return }
 
         if hasActiveRouteSnapshot {
+            if activeOperationMode == .joystick {
+                isJoystickSessionActive = currentPosition != nil
+                stopJoystickMovement()
+                if let current = currentPosition {
+                    startStreamingAndSend(current)
+                    startPinnedLocationKeepAlive()
+                    requestCameraCenter?(current)
+                }
+                appState = .readyToMove
+                return
+            }
+
             if shouldResumeActiveAfterReconnect {
                 shouldResumeActiveAfterReconnect = false
                 startSimulation()
             } else if let current = currentPosition {
                 startStreamingAndSend(current)
                 startPinnedLocationKeepAlive()
+                appState = .readyToMove
             }
             return
         }
 
         guard hasReadyDraft else { return }
         activateDraftForActiveSession()
-        startSimulation()
+        if activeOperationMode == .joystick {
+            beginJoystickSession()
+        } else {
+            startSimulation()
+        }
     }
 
     func handleDeviceDisconnected() {
-        shouldResumeActiveAfterReconnect = isActiveSimulationRunning
+        shouldResumeActiveAfterReconnect = isActiveSimulationRunning && activeOperationMode != .joystick
+        if activeOperationMode == .joystick {
+            stopJoystickMovement()
+            activeJoystickDirections.removeAll()
+        }
         stopSimulation(keepPinned: false)
+        if hasActiveRouteSnapshot {
+            appState = .readyToMove
+        }
     }
 
     private func clearDraftWorkflow() {
-        appState = .selectingA
+        appState = hasActiveRouteSnapshot ? .readyToMove : .selectingA
         pointA = nil
         pointB = nil
         tempCoordinate = nil
         waypoints = []
+        selectedImportedGPXRouteID = nil
         clearDraftGeometry()
         locationInputError = nil
     }
@@ -893,9 +1238,15 @@ final class AppViewModel {
         activeIsClosedLoop = false
         activeIsEndlessLoop = false
         isActiveSimulationRunning = false
+        isJoystickSessionActive = false
         shouldResumeActiveAfterReconnect = false
+        stopJoystickMovement()
+        resetSendTracking()
         if clearPosition {
             currentPosition = nil
+        }
+        if !hasDraftEdits {
+            appState = .selectingA
         }
     }
 
@@ -1041,7 +1392,10 @@ final class AppViewModel {
 
     func cleanup() {
         stopPinnedLocationKeepAlive()
+        stopJoystickMovement()
         moveTimer?.invalidate()
         moveTimer = nil
+        joystickTimer?.invalidate()
+        joystickTimer = nil
     }
 }

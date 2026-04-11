@@ -12,8 +12,11 @@ enum AppConstants {
     }
     enum Simulation {
         static let timerInterval: TimeInterval = 1.2
+        static let joystickTimerInterval: TimeInterval = 0.12
         static let minimumDistance: CLLocationDistance = 2.0
         static let minimumTimeInterval: TimeInterval = 3.0
+        static let joystickMinimumDistance: CLLocationDistance = 0.8
+        static let joystickMinimumTimeInterval: TimeInterval = 0.35
         static let defaultSpeed: Double = 5.0
         static let maximumSpeed: Double = 300.0
         static let speedStep: Double = 0.1
