@@ -179,9 +179,11 @@ extension ContentView {
     }
 
     func handleClosedLoopChange(_ isEnabled: Bool) {
-        if isEnabled {
-            vm.isEndlessLoop = false
-        }
+        vm.handleClosedLoopSettingChange(isEnabled)
+    }
+
+    func handleEndlessLoopChange(_ isEnabled: Bool) {
+        vm.handleEndlessLoopSettingChange(isEnabled)
     }
 
     func handleScenePhaseUpdate(_ newPhase: ScenePhase) {
@@ -241,7 +243,6 @@ extension ContentView {
             pinnedCoordinateSection
             StatusViewSection(vm: vm, routeColors: routeColors)
             locationInputSection
-            purePointControlsSection(isCompactSidebar: isCompactSidebar)
             Divider()
             movementSettingsSection
         }
@@ -277,6 +278,81 @@ extension ContentView {
                 purePointOverlaySection(overlay, isCompactSidebar: isCompactSidebar)
             }
         }
+    }
+
+    var rightSidebarPane: some View {
+        RightSidebarView(
+            sortMode: $savedLocationSortMode,
+            canCreateSavedItem: vm.canSaveCurrentSelection,
+            onToggleVisibility: { isRightSidebarVisible = false },
+            onCreateSavedItem: { vm.prepareSaveCurrentSelection() },
+            noticeText: purePointRenderNotice,
+            errorText: vm.savedLocationError ?? purePointImportError ?? vm.gpxImportError
+        ) {
+            VStack(alignment: .leading, spacing: 16) {
+                purePointControlsSection(isCompactSidebar: false)
+                ImportedGPXRouteSectionView(
+                    vm: vm,
+                    onImport: {
+                        vm.resetImportedGPXRouteSession()
+                        vm.gpxImportError = nil
+                        isImportingGPXRoute = true
+                    },
+                    onUse: { route in
+                        vm.useImportedGPXRoute(route)
+                    },
+                    onFocus: { route in
+                        focusImportedGPXRoute(route)
+                    },
+                    onRemove: { route in
+                        vm.removeImportedGPXRoute(route)
+                    }
+                )
+            }
+        } savedContent: {
+            SavedLocationSectionView(
+                items: sortedSavedLocations,
+                sortMode: savedLocationSortMode,
+                onApply: { item in
+                    vm.applySavedLocation(item)
+                },
+                onFocus: { item in
+                    focusSavedLocation(item)
+                },
+                onRename: { item in
+                    vm.beginRenamingSavedLocation(item)
+                },
+                onDelete: { item in
+                    vm.removeSavedLocation(item)
+                }
+            )
+        }
+    }
+
+    var sortedSavedLocations: [SavedLocationItem] {
+        switch savedLocationSortMode {
+        case .createdAt:
+            return vm.savedLocations.sorted { $0.createdAt > $1.createdAt }
+        case .region:
+            return vm.savedLocations.sorted {
+                if $0.regionGroup.sortOrder != $1.regionGroup.sortOrder {
+                    return $0.regionGroup.sortOrder < $1.regionGroup.sortOrder
+                }
+                return $0.title.localizedStandardCompare($1.title) == .orderedAscending
+            }
+        case .kind:
+            return vm.savedLocations.sorted {
+                if $0.kind.sortOrder != $1.kind.sortOrder {
+                    return $0.kind.sortOrder < $1.kind.sortOrder
+                }
+                return $0.title.localizedStandardCompare($1.title) == .orderedAscending
+            }
+        }
+    }
+
+    func focusSavedLocation(_ item: SavedLocationItem) {
+        guard !item.coordinates.isEmpty else { return }
+        cameraPosition = .region(vm.mapRegion(fitting: item.coordinates))
     }
 
     var speedTextBinding: Binding<String> {
@@ -332,5 +408,35 @@ extension ContentView {
         }
         .padding(24)
         .frame(width: 420)
+    }
+
+    var saveCurrentLocationSheet: some View {
+        SavedLocationNamingSheet(
+            title: "儲存目前項目",
+            subtitle: "會把目前正在用的內容優先存下來；若沒有活動中的內容，則儲存已完成草稿。",
+            confirmTitle: "儲存",
+            errorText: vm.savedLocationError,
+            name: Binding(
+                get: { vm.pendingSavedLocationTitle },
+                set: { vm.pendingSavedLocationTitle = $0 }
+            ),
+            onCancel: { vm.cancelSaveCurrentSelection() },
+            onConfirm: { vm.confirmSaveCurrentSelection() }
+        )
+    }
+
+    func renameSavedLocationSheet(_ item: SavedLocationItem) -> some View {
+        SavedLocationNamingSheet(
+            title: "重新命名",
+            subtitle: "更新「\(item.title)」的顯示名稱。",
+            confirmTitle: "儲存名稱",
+            errorText: vm.savedLocationError,
+            name: Binding(
+                get: { vm.pendingSavedLocationTitle },
+                set: { vm.pendingSavedLocationTitle = $0 }
+            ),
+            onCancel: { vm.cancelRenameSavedLocation() },
+            onConfirm: { vm.confirmRenameSavedLocation() }
+        )
     }
 }

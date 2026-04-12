@@ -9,11 +9,11 @@ struct ImportedOverlayNamingSheet: View {
     var body: some View {
         NavigationStack {
             VStack(alignment: .leading, spacing: 16) {
-                Text("設定純點圖層名稱")
+                Text("設定 KML 圖層名稱")
                     .font(.title3)
                     .fontWeight(.semibold)
 
-                Text("匯入後 sidebar 只會顯示這裡設定的名稱。")
+                Text("匯入後右側欄位會顯示這裡設定的名稱。")
                     .font(.caption)
                     .foregroundColor(.secondary)
 

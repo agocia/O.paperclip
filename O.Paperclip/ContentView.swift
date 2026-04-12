@@ -12,6 +12,8 @@ struct ContentView: View {
         static let centerLon = "map.center.lon"
         static let spanLat = "map.span.lat"
         static let spanLon = "map.span.lon"
+        static let isRightSidebarVisible = "sidebar.right.visible"
+        static let savedLocationSortMode = "saved-location.sort-mode"
     }
 
     @StateObject var diagnostics = AppDiagnostics.shared
@@ -31,6 +33,8 @@ struct ContentView: View {
     @State var isShowingImportedOverlayNamingSheet: Bool = false
     @State var isShowingPurePointRemoteApprovalSheet: Bool = false
     @State var visibleMapRegion: MKCoordinateRegion
+    @State var isRightSidebarVisible: Bool
+    @State var savedLocationSortMode: SavedLocationSortMode
     let routeColors: [Color] = [.yellow, .orange, .mint, .pink]
     private let purePointViewportActivationCount = AppConstants.PurePoint.viewportActivationCount
     private let purePointRenderedLimit = AppConstants.PurePoint.renderedLimit
@@ -66,6 +70,9 @@ struct ContentView: View {
         )
         _cameraPosition = State(initialValue: .region(region))
         _visibleMapRegion = State(initialValue: region)
+        _isRightSidebarVisible = State(initialValue: defaults.object(forKey: PersistedMapKeys.isRightSidebarVisible) as? Bool ?? true)
+        let sortRaw = defaults.string(forKey: PersistedMapKeys.savedLocationSortMode) ?? SavedLocationSortMode.createdAt.rawValue
+        _savedLocationSortMode = State(initialValue: SavedLocationSortMode(rawValue: sortRaw) ?? .createdAt)
         let initialOverlays = PurePointOverlayRepository.initialOverlays()
         _purePointOverlays = State(initialValue: initialOverlays)
         _purePointOverlayStates = State(initialValue: Self.makeOverlayStates(for: initialOverlays))
@@ -103,10 +110,10 @@ struct ContentView: View {
         guard state.totalMatchingCount > 0 else { return nil }
 
         if state.isDensityLimited {
-            return "為了避免地圖當掉，純點目前只顯示視野內 \(state.points.count) / \(state.viewportMatchingCount) 個。請放大地圖或縮小分類。"
+            return "為了避免地圖當掉，KML 目前只顯示視野內 \(state.points.count) / \(state.viewportMatchingCount) 個。請放大地圖或縮小分類。"
         }
         if state.isViewportFiltered, state.viewportMatchingCount < state.totalMatchingCount {
-            return "純點數量較多，地圖目前只渲染視野內的 \(state.viewportMatchingCount) 個點位。"
+            return "KML 點位較多，地圖目前只渲染視野內的 \(state.viewportMatchingCount) 個點位。"
         }
         return nil
     }
@@ -132,6 +139,15 @@ struct ContentView: View {
         }
         .onChange(of: vm.isClosedLoop) { _, isEnabled in
             handleClosedLoopChange(isEnabled)
+        }
+        .onChange(of: vm.isEndlessLoop) { _, isEnabled in
+            handleEndlessLoopChange(isEnabled)
+        }
+        .onChange(of: isRightSidebarVisible) { _, isVisible in
+            UserDefaults.standard.set(isVisible, forKey: PersistedMapKeys.isRightSidebarVisible)
+        }
+        .onChange(of: savedLocationSortMode) { _, mode in
+            UserDefaults.standard.set(mode.rawValue, forKey: PersistedMapKeys.savedLocationSortMode)
         }
         .onChange(of: scenePhase) { _, newPhase in
             handleScenePhaseUpdate(newPhase)
@@ -167,6 +183,34 @@ struct ContentView: View {
         .sheet(isPresented: routeReplacementSheetBinding) {
             routeReplacementSheet
         }
+        .sheet(
+            isPresented: Binding(
+                get: { vm.isShowingSaveLocationSheet },
+                set: { newValue in
+                    if newValue {
+                        vm.isShowingSaveLocationSheet = true
+                    } else {
+                        vm.cancelSaveCurrentSelection()
+                    }
+                }
+            )
+        ) {
+            saveCurrentLocationSheet
+        }
+        .sheet(
+            item: Binding(
+                get: { vm.savedLocationRenamingTarget },
+                set: { newValue in
+                    if let newValue {
+                        vm.savedLocationRenamingTarget = newValue
+                    } else {
+                        vm.cancelRenameSavedLocation()
+                    }
+                }
+            )
+        ) { item in
+            renameSavedLocationSheet(item)
+        }
         .onDisappear {
             vm.cleanup()
         }
@@ -190,11 +234,34 @@ struct ContentView: View {
 
     private var splitViewContent: some View {
         HStack(spacing: 0) {
-                    sidebarPane(isCompactSidebar: true)
+            sidebarPane(isCompactSidebar: true)
                 .frame(width: 320)
             Divider()
-            detailPane
+            ZStack(alignment: .trailing) {
+                detailPane
+                if !isRightSidebarVisible {
+                    collapsedRightSidebarHandle
+                }
+            }
+            if isRightSidebarVisible {
+                Divider()
+                rightSidebarPane
+                    .frame(width: 360)
+            }
         }
+    }
+
+    private var collapsedRightSidebarHandle: some View {
+        Button(action: { isRightSidebarVisible = true }) {
+            Image(systemName: "sidebar.right")
+                .padding(.horizontal, 10)
+                .padding(.vertical, 14)
+                .background(ModernTheme.panelRaised)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .shadow(color: ModernTheme.shadow, radius: 8, y: 3)
+        }
+        .buttonStyle(.plain)
+        .padding(.trailing, 12)
     }
 
     private var detailPane: some View {

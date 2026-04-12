@@ -13,7 +13,7 @@ struct ImportedGPXRouteNamingSheet: View {
                     .font(.title3)
                     .fontWeight(.semibold)
 
-                Text("匯入後 sidebar 會顯示這裡設定的名稱。")
+                Text("匯入後右側欄位會顯示這裡設定的名稱。")
                     .font(.caption)
                     .foregroundColor(.secondary)
 

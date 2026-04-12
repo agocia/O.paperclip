@@ -21,7 +21,7 @@ struct StatusViewSection: View {
                 } else if vm.operationMode == .fixedPoint {
                     Text("Shift + 點擊設定定位點").foregroundColor(ModernTheme.accent)
                 } else if vm.operationMode == .fixedRoute {
-                    Text("請匯入或選擇固定路線").foregroundColor(ModernTheme.accent)
+                    Text("請到右側欄位匯入或選擇固定路線").foregroundColor(ModernTheme.accent)
                 } else {
                     Text("Shift + 點擊設定「起點 A」").foregroundColor(ModernTheme.accent)
                 }

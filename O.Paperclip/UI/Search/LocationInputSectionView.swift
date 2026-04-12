@@ -11,15 +11,18 @@ struct LocationInputSectionView: View {
 
     var body: some View {
         if vm.operationMode == .fixedRoute {
-            ImportedGPXRouteSectionView(
-                vm: vm,
-                onImport: onImportGPX,
-                onUse: onUseImportedRoute,
-                onFocus: onFocusImportedRoute,
-                onRemove: onRemoveImportedRoute
-            )
+            fixedRouteHintSection
         } else {
             standardLocationInputSection
+        }
+    }
+
+    private var fixedRouteHintSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("位置輸入").font(.subheadline).fontWeight(.semibold).foregroundColor(ModernTheme.label)
+            Text("固定路線的匯入與選擇已移到右側「匯入與收藏」欄位。")
+                .font(.caption)
+                .foregroundColor(.secondary)
         }
     }
 

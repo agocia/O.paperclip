@@ -33,6 +33,17 @@ struct MKDirectionsRouteCalculator: RouteCalculating {
     }
 }
 
+private enum RouteTravelDirection: Int {
+    case forward = 1
+    case backward = -1
+
+    var multiplier: Double { Double(rawValue) }
+
+    mutating func reverse() {
+        self = self == .forward ? .backward : .forward
+    }
+}
+
 @MainActor
 @Observable
 final class AppViewModel {
@@ -65,6 +76,7 @@ final class AppViewModel {
     var cumulativeRouteDistances: [Double] = []
     var traveledDistance: Double = 0.0
     var totalRouteDistance: Double = 0.0
+    private var routeTravelDirection: RouteTravelDirection = .forward
     var activeIsClosedLoop: Bool = false
     var activeIsEndlessLoop: Bool = false
     var isActiveSimulationRunning: Bool = false
@@ -86,6 +98,13 @@ final class AppViewModel {
     var isShowingImportedGPXRouteNamingSheet: Bool = false
     var gpxImportError: String?
 
+    // MARK: - Saved locations
+    var savedLocations: [SavedLocationItem] = SavedLocationStore.loadItems()
+    var isShowingSaveLocationSheet: Bool = false
+    var pendingSavedLocationTitle: String = ""
+    var savedLocationError: String?
+    var savedLocationRenamingTarget: SavedLocationItem?
+
     // MARK: - Location input
     var placeKeyword: String = ""
     var placeResults: [MKMapItem] = []
@@ -101,6 +120,7 @@ final class AppViewModel {
     @ObservationIgnored private var joystickTimer: Timer?
     @ObservationIgnored private var pinnedKeepAliveTimer: Timer?
     @ObservationIgnored private var cancellables: Set<AnyCancellable> = []
+    @ObservationIgnored private var pendingSavedLocationDraft: SavedLocationDraft?
     private(set) var lastSentPosition: CLLocationCoordinate2D?
     private(set) var lastSentAt: Date?
     var dependencyVersion: Int = 0
@@ -187,6 +207,10 @@ final class AppViewModel {
             return "目前藍線已停止移動，但定位仍固定在裝置上。"
         }
         return nil
+    }
+
+    var canSaveCurrentSelection: Bool {
+        currentSaveDraftCandidate() != nil
     }
 
     var estimatedTime: String {
@@ -567,6 +591,239 @@ final class AppViewModel {
         persistImportedGPXRouteSettings()
     }
 
+    // MARK: - Saved locations
+
+    func prepareSaveCurrentSelection() {
+        guard let draft = currentSaveDraftCandidate() else {
+            savedLocationError = "目前沒有可儲存的位置或路線。"
+            return
+        }
+        pendingSavedLocationDraft = draft
+        pendingSavedLocationTitle = draft.title
+        savedLocationError = nil
+        isShowingSaveLocationSheet = true
+    }
+
+    func confirmSaveCurrentSelection() {
+        guard let draft = pendingSavedLocationDraft else {
+            savedLocationError = "目前沒有可儲存的位置或路線。"
+            return
+        }
+
+        let title = pendingSavedLocationTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty else {
+            savedLocationError = "請先輸入名稱。"
+            return
+        }
+
+        do {
+            let saved = try SavedLocationStore.persist(
+                SavedLocationDraft(
+                    title: title,
+                    kind: draft.kind,
+                    coordinates: draft.coordinates,
+                    totalDistance: draft.totalDistance,
+                    createdAt: draft.createdAt,
+                    sourceMode: draft.sourceMode
+                )
+            )
+            savedLocations.removeAll { $0.id == saved.id }
+            savedLocations.insert(saved, at: 0)
+            pendingSavedLocationDraft = nil
+            pendingSavedLocationTitle = ""
+            savedLocationError = nil
+            isShowingSaveLocationSheet = false
+        } catch {
+            savedLocationError = error.localizedDescription
+        }
+    }
+
+    func cancelSaveCurrentSelection() {
+        pendingSavedLocationDraft = nil
+        pendingSavedLocationTitle = ""
+        savedLocationError = nil
+        isShowingSaveLocationSheet = false
+    }
+
+    func beginRenamingSavedLocation(_ item: SavedLocationItem) {
+        savedLocationRenamingTarget = item
+        pendingSavedLocationTitle = item.title
+        savedLocationError = nil
+    }
+
+    func confirmRenameSavedLocation() {
+        guard let item = savedLocationRenamingTarget else { return }
+        let title = pendingSavedLocationTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty else {
+            savedLocationError = "請先輸入名稱。"
+            return
+        }
+
+        do {
+            let renamed = try SavedLocationStore.rename(item, to: title)
+            if let index = savedLocations.firstIndex(where: { $0.id == renamed.id }) {
+                savedLocations[index] = renamed
+            }
+            savedLocationRenamingTarget = nil
+            pendingSavedLocationTitle = ""
+            savedLocationError = nil
+        } catch {
+            savedLocationError = error.localizedDescription
+        }
+    }
+
+    func cancelRenameSavedLocation() {
+        savedLocationRenamingTarget = nil
+        pendingSavedLocationTitle = ""
+        savedLocationError = nil
+    }
+
+    func removeSavedLocation(_ item: SavedLocationItem) {
+        SavedLocationStore.deleteStoredItem(item)
+        savedLocations.removeAll { $0.id == item.id }
+        if savedLocationRenamingTarget?.id == item.id {
+            savedLocationRenamingTarget = nil
+            pendingSavedLocationTitle = ""
+        }
+    }
+
+    func applySavedLocation(_ item: SavedLocationItem) {
+        savedLocationError = nil
+
+        switch item.kind {
+        case .point:
+            operationMode = .fixedPoint
+            pointB = nil
+            pointA = item.coordinates.first
+            tempCoordinate = nil
+            waypoints = []
+            selectedImportedGPXRouteID = nil
+            locationInputError = nil
+            appState = pointA == nil ? .selectingA : .readyToMove
+            clearDraftGeometry()
+        case .route, .loop:
+            operationMode = .fixedRoute
+            pointA = nil
+            pointB = nil
+            tempCoordinate = nil
+            waypoints = []
+            routes = []
+            selectedRouteIndex = 0
+            selectedImportedGPXRouteID = nil
+            let normalized = normalizeRoutePoints(item.coordinates)
+            guard normalized.count > 1 else {
+                savedLocationError = "這筆收藏的路線資料異常。"
+                return
+            }
+            draftRoutePoints = normalized
+            draftCumulativeRouteDistances = RouteMotionEngine.cumulativeDistances(for: normalized)
+            draftTotalRouteDistance = item.totalDistance > 0 ? item.totalDistance : (draftCumulativeRouteDistances.last ?? 0)
+            var coords = normalized
+            customRoutePolyline = MKPolyline(coordinates: &coords, count: coords.count)
+            isClosedLoop = item.kind == .loop
+            if isClosedLoop {
+                isEndlessLoop = false
+            }
+            locationInputError = nil
+            appState = .readyToMove
+        }
+    }
+
+    private func currentSaveDraftCandidate() -> SavedLocationDraft? {
+        if hasActiveRouteSnapshot {
+            return makeSavedLocationDraft(
+                modeLabel: activeOperationMode.rawValue,
+                coordinateSource: activeCoordinatesForSaving(),
+                totalDistance: totalRouteDistance,
+                isClosedLoop: activeIsClosedLoop
+            )
+        }
+        if hasReadyDraft {
+            return makeSavedLocationDraft(
+                modeLabel: operationMode.rawValue,
+                coordinateSource: draftCoordinatesForSaving(),
+                totalDistance: draftTotalRouteDistance,
+                isClosedLoop: isClosedLoop
+            )
+        }
+        return nil
+    }
+
+    private func makeSavedLocationDraft(
+        modeLabel: String,
+        coordinateSource: [CLLocationCoordinate2D],
+        totalDistance: Double,
+        isClosedLoop: Bool
+    ) -> SavedLocationDraft? {
+        let createdAt = Date()
+        let coordinates = normalizeRoutePoints(coordinateSource)
+        guard let first = coordinates.first else { return nil }
+        let formsLoop: Bool
+        if let last = coordinates.last {
+            formsLoop = abs(first.latitude - last.latitude) < 0.0000001
+                && abs(first.longitude - last.longitude) < 0.0000001
+        } else {
+            formsLoop = false
+        }
+
+        let kind: SavedLocationKind
+        if coordinates.count == 1 {
+            kind = .point
+        } else if isClosedLoop || formsLoop {
+            kind = .loop
+        } else {
+            kind = .route
+        }
+
+        let title = suggestedSavedLocationTitle(
+            kind: kind,
+            coordinate: first,
+            createdAt: createdAt
+        )
+        return SavedLocationDraft(
+            title: title,
+            kind: kind,
+            coordinates: coordinates,
+            totalDistance: totalDistance,
+            createdAt: createdAt,
+            sourceMode: modeLabel
+        )
+    }
+
+    private func activeCoordinatesForSaving() -> [CLLocationCoordinate2D] {
+        if activeOperationMode == .fixedPoint || activeOperationMode == .joystick {
+            return currentPosition.map { [$0] } ?? []
+        }
+        return currentRoutePoints
+    }
+
+    private func draftCoordinatesForSaving() -> [CLLocationCoordinate2D] {
+        if operationMode == .fixedPoint || operationMode == .joystick {
+            return pointA.map { [$0] } ?? []
+        }
+        return draftRoutePoints
+    }
+
+    private func suggestedSavedLocationTitle(
+        kind: SavedLocationKind,
+        coordinate: CLLocationCoordinate2D,
+        createdAt: Date
+    ) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_TW")
+        formatter.dateFormat = "MM/dd HH:mm"
+        let prefix: String
+        switch kind {
+        case .point:
+            prefix = "定點"
+        case .route:
+            prefix = "線路"
+        case .loop:
+            prefix = "迴路"
+        }
+        return "\(prefix) \(formatter.string(from: createdAt)) (\(String(format: "%.3f", coordinate.latitude)), \(String(format: "%.3f", coordinate.longitude)))"
+    }
+
     // MARK: - Main action
 
     func handleMainAction() {
@@ -580,7 +837,7 @@ final class AppViewModel {
     func confirmRouteReplacement() {
         isShowingRouteReplacementConfirmation = false
         guard deviceManager.isConnected else { return }
-        stopSimulation(keepPinned: false)
+        prepareForRouteReplacement()
         activateDraftForActiveSession()
         if activeOperationMode == .joystick {
             beginJoystickSession()
@@ -676,6 +933,7 @@ final class AppViewModel {
             cumulativeRouteDistances = []
             traveledDistance = 0
             totalRouteDistance = 0
+            routeTravelDirection = .forward
             activeRoutePolyline = nil
             isJoystickSessionActive = operationMode == .joystick
         case .routeAB, .multiPoint, .fixedRoute:
@@ -684,6 +942,7 @@ final class AppViewModel {
             cumulativeRouteDistances = draftCumulativeRouteDistances
             traveledDistance = 0
             totalRouteDistance = draftTotalRouteDistance
+            routeTravelDirection = .forward
             currentPosition = draftRoutePoints.first
             activeRoutePolyline = makeDraftPolyline()
             isJoystickSessionActive = false
@@ -893,17 +1152,10 @@ final class AppViewModel {
         if currentPosition == nil, let first = currentRoutePoints.first {
             currentPosition = first
         }
+        traveledDistance = clampedRouteDistance(traveledDistance)
+        normalizeRouteDirectionForCurrentState()
         if let initial = currentPosition ?? currentRoutePoints.first {
             startStreamingAndSend(initial)
-        }
-
-        let loopMode: RouteMotionEngine.LoopMode
-        if activeOperationMode == .multiPoint && activeIsClosedLoop {
-            loopMode = .circular
-        } else if activeIsEndlessLoop {
-            loopMode = .pingPong
-        } else {
-            loopMode = .singlePass
         }
 
         let timerInterval = AppConstants.Simulation.timerInterval
@@ -911,23 +1163,20 @@ final class AppViewModel {
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 let speedMetersPerSecond = self.speed * (1000.0 / 3600.0)
-                self.traveledDistance += speedMetersPerSecond * timerInterval
+                let distanceDelta = speedMetersPerSecond * timerInterval
+                let progress = self.advanceRouteProgress(by: distanceDelta)
 
-                guard let targetDistance = RouteMotionEngine.targetDistance(
-                    traveledDistance: self.traveledDistance,
-                    routeDistance: self.totalRouteDistance,
-                    loopMode: loopMode
-                ) else {
+                if progress.shouldStop {
                     self.stopSimulation(keepPinned: true)
-                    self.currentPosition = self.currentRoutePoints.last
-                    if let last = self.currentPosition {
-                        self.sendCoordinateAsync(last)
+                    if let terminalPosition = self.positionForCurrentEndpoint() {
+                        self.currentPosition = terminalPosition
+                        self.sendCoordinateAsync(terminalPosition)
                     }
                     return
                 }
 
                 if let newPos = RouteMotionEngine.coordinate(
-                    at: targetDistance,
+                    at: progress.targetDistance,
                     in: self.currentRoutePoints,
                     distances: self.cumulativeRouteDistances
                 ) {
@@ -958,6 +1207,109 @@ final class AppViewModel {
             appState = .readyToMove
         } else if !hasDraftEdits {
             appState = .selectingA
+        }
+    }
+
+    private func advanceRouteProgress(by distanceDelta: Double) -> (targetDistance: Double, shouldStop: Bool) {
+        guard totalRouteDistance > 0 else {
+            traveledDistance = 0
+            return (0, true)
+        }
+
+        if activeOperationMode == .multiPoint && activeIsClosedLoop {
+            var nextDistance = traveledDistance + distanceDelta
+            nextDistance.formTruncatingRemainder(dividingBy: totalRouteDistance)
+            if nextDistance < 0 {
+                nextDistance += totalRouteDistance
+            }
+            traveledDistance = nextDistance
+            routeTravelDirection = .forward
+            return (nextDistance, false)
+        }
+
+        var nextDistance = traveledDistance + (distanceDelta * routeTravelDirection.multiplier)
+        if activeIsEndlessLoop {
+            while nextDistance > totalRouteDistance || nextDistance < 0 {
+                if nextDistance > totalRouteDistance {
+                    nextDistance = totalRouteDistance - (nextDistance - totalRouteDistance)
+                    routeTravelDirection = .backward
+                } else if nextDistance < 0 {
+                    nextDistance = -nextDistance
+                    routeTravelDirection = .forward
+                }
+            }
+            traveledDistance = clampedRouteDistance(nextDistance)
+            return (traveledDistance, false)
+        }
+
+        if routeTravelDirection == .forward, nextDistance >= totalRouteDistance {
+            traveledDistance = totalRouteDistance
+            routeTravelDirection = .forward
+            return (totalRouteDistance, true)
+        }
+
+        if routeTravelDirection == .backward, nextDistance <= 0 {
+            traveledDistance = 0
+            routeTravelDirection = .backward
+            return (0, true)
+        }
+
+        traveledDistance = clampedRouteDistance(nextDistance)
+        return (traveledDistance, false)
+    }
+
+    private func normalizeRouteDirectionForCurrentState() {
+        guard totalRouteDistance > 0 else {
+            routeTravelDirection = .forward
+            return
+        }
+        if activeOperationMode == .multiPoint && activeIsClosedLoop {
+            routeTravelDirection = .forward
+            return
+        }
+        if activeIsEndlessLoop {
+            if traveledDistance >= totalRouteDistance {
+                routeTravelDirection = .backward
+            } else if traveledDistance <= 0 {
+                routeTravelDirection = .forward
+            }
+        } else {
+            traveledDistance = clampedRouteDistance(traveledDistance)
+        }
+    }
+
+    private func clampedRouteDistance(_ distance: Double) -> Double {
+        min(max(distance, 0), totalRouteDistance)
+    }
+
+    private func positionForCurrentEndpoint() -> CLLocationCoordinate2D? {
+        if routeTravelDirection == .backward {
+            return currentRoutePoints.first
+        }
+        return currentRoutePoints.last
+    }
+
+    func handleEndlessLoopSettingChange(_ isEnabled: Bool) {
+        if isEnabled, isClosedLoop {
+            isEndlessLoop = false
+        }
+        guard hasActiveRouteSnapshot, !hasDraftEdits, activeOperationMode != .fixedPoint, activeOperationMode != .joystick else {
+            return
+        }
+        activeIsEndlessLoop = isEnabled && !activeIsClosedLoop
+    }
+
+    func handleClosedLoopSettingChange(_ isEnabled: Bool) {
+        if isEnabled {
+            isEndlessLoop = false
+        }
+        guard hasActiveRouteSnapshot, !hasDraftEdits, activeOperationMode == .multiPoint else {
+            return
+        }
+        activeIsClosedLoop = isEnabled
+        if isEnabled {
+            activeIsEndlessLoop = false
+            routeTravelDirection = .forward
         }
     }
 
@@ -1235,6 +1587,7 @@ final class AppViewModel {
         cumulativeRouteDistances = []
         traveledDistance = 0
         totalRouteDistance = 0
+        routeTravelDirection = .forward
         activeIsClosedLoop = false
         activeIsEndlessLoop = false
         isActiveSimulationRunning = false
@@ -1260,6 +1613,17 @@ final class AppViewModel {
         guard draftRoutePoints.count > 1 else { return nil }
         var coords = draftRoutePoints
         return MKPolyline(coordinates: &coords, count: coords.count)
+    }
+
+    private func prepareForRouteReplacement() {
+        moveTimer?.invalidate()
+        moveTimer = nil
+        stopJoystickMovement()
+        stopPinnedLocationKeepAlive()
+        isActiveSimulationRunning = false
+        isJoystickSessionActive = false
+        shouldResumeActiveAfterReconnect = false
+        resetSendTracking()
     }
 
     // MARK: - Scene phase

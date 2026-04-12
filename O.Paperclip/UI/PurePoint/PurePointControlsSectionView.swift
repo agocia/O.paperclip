@@ -30,7 +30,7 @@ struct PurePointControlsSectionView<OverlayContent: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text("純點圖層").font(.subheadline).fontWeight(.semibold).foregroundColor(ModernTheme.label)
+                Text("KML 匯入").font(.subheadline).fontWeight(.semibold).foregroundColor(ModernTheme.label)
                 Spacer()
                 Button("匯入 KML", action: onImport)
                     .buttonStyle(.bordered)
@@ -44,7 +44,7 @@ struct PurePointControlsSectionView<OverlayContent: View>: View {
             }
 
             HStack {
-                Text("目前載入 \(overlayCount) 個純點圖層")
+                Text("目前載入 \(overlayCount) 個 KML 圖層")
                     .font(.caption)
                     .foregroundColor(.secondary)
                 Spacer()

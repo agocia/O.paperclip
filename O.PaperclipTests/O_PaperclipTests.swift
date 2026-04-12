@@ -750,4 +750,91 @@ struct O_PaperclipTests {
         #expect(vm.isActiveSimulationRunning)
         #expect(vm.activeRoutePolyline != nil)
     }
+
+    @MainActor
+    @Test func confirmingRouteReplacementKeepsContinuousStreamAlive() {
+        let deviceManager = MockDeviceManager()
+        deviceManager.isConnected = true
+
+        let vm = AppViewModel(
+            deviceManager: deviceManager,
+            locationSearchService: MockLocationSearchService()
+        )
+
+        let firstRoute = ImportedGPXRoute(
+            id: "route-1",
+            title: "第一條",
+            sourceName: "a.gpx",
+            points: [
+                CLLocationCoordinate2D(latitude: 25.0400, longitude: 121.5700),
+                CLLocationCoordinate2D(latitude: 25.0410, longitude: 121.5710)
+            ],
+            totalDistance: 150,
+            sourceFilePath: "/tmp/a.gpx",
+            sourceRouteID: "trk-0"
+        )
+        let secondRoute = ImportedGPXRoute(
+            id: "route-2",
+            title: "第二條",
+            sourceName: "b.gpx",
+            points: [
+                CLLocationCoordinate2D(latitude: 25.0500, longitude: 121.5800),
+                CLLocationCoordinate2D(latitude: 25.0510, longitude: 121.5810)
+            ],
+            totalDistance: 160,
+            sourceFilePath: "/tmp/b.gpx",
+            sourceRouteID: "trk-1"
+        )
+
+        vm.operationMode = .fixedRoute
+        vm.useImportedGPXRoute(firstRoute)
+        vm.handleMainAction()
+
+        #expect(vm.isActiveSimulationRunning)
+        #expect(deviceManager.stopContinuousLocationStreamCallCount == 0)
+
+        vm.useImportedGPXRoute(secondRoute)
+        vm.confirmRouteReplacement()
+
+        #expect(vm.activeOperationMode == .fixedRoute)
+        #expect(vm.currentRoutePoints.count == secondRoute.points.count)
+        #expect(vm.currentRoutePoints.first?.latitude == secondRoute.points.first?.latitude)
+        #expect(vm.currentRoutePoints.last?.longitude == secondRoute.points.last?.longitude)
+        #expect(vm.isActiveSimulationRunning)
+        #expect(deviceManager.stopContinuousLocationStreamCallCount == 0)
+    }
+
+    @MainActor
+    @Test func savesPinnedLocationAndCanApplyItAgain() throws {
+        let deviceManager = MockDeviceManager()
+        let vm = AppViewModel(
+            deviceManager: deviceManager,
+            locationSearchService: MockLocationSearchService()
+        )
+
+        let coordinate = CLLocationCoordinate2D(latitude: 25.0330, longitude: 121.5654)
+        vm.operationMode = .fixedPoint
+        vm.insertPoint(coordinate)
+        vm.prepareSaveCurrentSelection()
+        vm.pendingSavedLocationTitle = "台北車站"
+        vm.confirmSaveCurrentSelection()
+
+        guard let saved = vm.savedLocations.first(where: { $0.title == "台北車站" }) else {
+            Issue.record("找不到剛儲存的收藏項目")
+            return
+        }
+
+        #expect(saved.kind == .point)
+        #expect(saved.coordinates.count == 1)
+
+        vm.resetAll()
+        vm.applySavedLocation(saved)
+
+        #expect(vm.operationMode == .fixedPoint)
+        #expect(vm.appState == .readyToMove)
+        #expect(vm.pointA?.latitude == coordinate.latitude)
+        #expect(vm.pointA?.longitude == coordinate.longitude)
+
+        vm.removeSavedLocation(saved)
+    }
 }
