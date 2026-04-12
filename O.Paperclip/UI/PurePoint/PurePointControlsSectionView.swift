@@ -6,8 +6,10 @@ struct PurePointControlsSectionView<OverlayContent: View>: View {
     let renderNotice: String?
     let hasVisiblePoints: Bool
     let onImport: () -> Void
+    let onDropURLs: ([URL]) -> Bool
     let onFocusAll: () -> Void
     let overlaysContent: () -> OverlayContent
+    @State private var isDropTargeted = false
 
     init(
         overlayCount: Int,
@@ -15,6 +17,7 @@ struct PurePointControlsSectionView<OverlayContent: View>: View {
         renderNotice: String?,
         hasVisiblePoints: Bool,
         onImport: @escaping () -> Void,
+        onDropURLs: @escaping ([URL]) -> Bool,
         onFocusAll: @escaping () -> Void,
         @ViewBuilder overlaysContent: @escaping () -> OverlayContent
     ) {
@@ -23,6 +26,7 @@ struct PurePointControlsSectionView<OverlayContent: View>: View {
         self.renderNotice = renderNotice
         self.hasVisiblePoints = hasVisiblePoints
         self.onImport = onImport
+        self.onDropURLs = onDropURLs
         self.onFocusAll = onFocusAll
         self.overlaysContent = overlaysContent
     }
@@ -36,6 +40,10 @@ struct PurePointControlsSectionView<OverlayContent: View>: View {
                     .buttonStyle(.bordered)
                     .controlSize(.small)
             }
+
+            Text("可直接拖曳 .kml 檔案到這裡")
+                .font(.caption)
+                .foregroundColor(.secondary)
 
             if let importError {
                 Text(importError)
@@ -62,5 +70,20 @@ struct PurePointControlsSectionView<OverlayContent: View>: View {
 
             overlaysContent()
         }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(isDropTargeted ? ModernTheme.accent.opacity(0.10) : ModernTheme.inset.opacity(0.32))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(
+                    isDropTargeted ? ModernTheme.accent.opacity(0.9) : Color.black.opacity(0.08),
+                    lineWidth: isDropTargeted ? 1.6 : 1
+                )
+        )
+        .dropDestination(for: URL.self, action: { urls, _ in
+            onDropURLs(urls)
+        }, isTargeted: { isDropTargeted = $0 })
     }
 }

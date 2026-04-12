@@ -837,4 +837,48 @@ struct O_PaperclipTests {
 
         vm.removeSavedLocation(saved)
     }
+
+    @MainActor
+    @Test func savePreviewUsesDraftSourceForReadyPoint() throws {
+        let vm = AppViewModel(
+            deviceManager: MockDeviceManager(),
+            locationSearchService: MockLocationSearchService()
+        )
+
+        vm.operationMode = .fixedPoint
+        vm.insertPoint(CLLocationCoordinate2D(latitude: 25.0330, longitude: 121.5654))
+
+        let preview = vm.currentSavableItemPreview
+
+        #expect(preview.isAvailable)
+        #expect(preview.kind == .point)
+        #expect(preview.sourceLabel == "已完成草稿")
+        #expect(preview.actionTitle == "儲存這個定點")
+        #expect(preview.summaryText.contains("座標"))
+    }
+
+    @MainActor
+    @Test func savePreviewUsesActiveSourceForRunningRoute() throws {
+        let vm = AppViewModel(
+            deviceManager: MockDeviceManager(),
+            locationSearchService: MockLocationSearchService()
+        )
+
+        vm.activeOperationMode = .fixedRoute
+        vm.currentRoutePoints = [
+            CLLocationCoordinate2D(latitude: 25.0330, longitude: 121.5654),
+            CLLocationCoordinate2D(latitude: 25.0340, longitude: 121.5664)
+        ]
+        vm.totalRouteDistance = 240
+        var coordinates = vm.currentRoutePoints
+        vm.activeRoutePolyline = MKPolyline(coordinates: &coordinates, count: coordinates.count)
+
+        let preview = vm.currentSavableItemPreview
+
+        #expect(preview.isAvailable)
+        #expect(preview.kind == .route)
+        #expect(preview.sourceLabel == "活動中的內容")
+        #expect(preview.actionTitle == "儲存這條線路")
+        #expect(preview.summaryText.contains("2 點"))
+    }
 }

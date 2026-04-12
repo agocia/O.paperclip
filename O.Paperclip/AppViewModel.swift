@@ -17,6 +17,11 @@ private final class UnsafeSendableBox<T>: @unchecked Sendable {
     }
 }
 
+private struct SavableItemCandidate {
+    let draft: SavedLocationDraft
+    let sourceLabel: String
+}
+
 protocol RouteCalculating {
     func calculate(
         request: MKDirections.Request,
@@ -104,6 +109,7 @@ final class AppViewModel {
     var pendingSavedLocationTitle: String = ""
     var savedLocationError: String?
     var savedLocationRenamingTarget: SavedLocationItem?
+    var pendingSavedLocationPreview: CurrentSavableItemPreview?
 
     // MARK: - Location input
     var placeKeyword: String = ""
@@ -210,7 +216,14 @@ final class AppViewModel {
     }
 
     var canSaveCurrentSelection: Bool {
-        currentSaveDraftCandidate() != nil
+        currentSaveCandidate() != nil
+    }
+
+    var currentSavableItemPreview: CurrentSavableItemPreview {
+        guard let candidate = currentSaveCandidate() else {
+            return .unavailable
+        }
+        return preview(for: candidate)
     }
 
     var estimatedTime: String {
@@ -594,12 +607,13 @@ final class AppViewModel {
     // MARK: - Saved locations
 
     func prepareSaveCurrentSelection() {
-        guard let draft = currentSaveDraftCandidate() else {
+        guard let candidate = currentSaveCandidate() else {
             savedLocationError = "目前沒有可儲存的位置或路線。"
             return
         }
-        pendingSavedLocationDraft = draft
-        pendingSavedLocationTitle = draft.title
+        pendingSavedLocationDraft = candidate.draft
+        pendingSavedLocationPreview = preview(for: candidate)
+        pendingSavedLocationTitle = candidate.draft.title
         savedLocationError = nil
         isShowingSaveLocationSheet = true
     }
@@ -630,6 +644,7 @@ final class AppViewModel {
             savedLocations.removeAll { $0.id == saved.id }
             savedLocations.insert(saved, at: 0)
             pendingSavedLocationDraft = nil
+            pendingSavedLocationPreview = nil
             pendingSavedLocationTitle = ""
             savedLocationError = nil
             isShowingSaveLocationSheet = false
@@ -640,6 +655,7 @@ final class AppViewModel {
 
     func cancelSaveCurrentSelection() {
         pendingSavedLocationDraft = nil
+        pendingSavedLocationPreview = nil
         pendingSavedLocationTitle = ""
         savedLocationError = nil
         isShowingSaveLocationSheet = false
@@ -729,24 +745,51 @@ final class AppViewModel {
         }
     }
 
-    private func currentSaveDraftCandidate() -> SavedLocationDraft? {
+    private func currentSaveCandidate() -> SavableItemCandidate? {
         if hasActiveRouteSnapshot {
-            return makeSavedLocationDraft(
+            guard let draft = makeSavedLocationDraft(
                 modeLabel: activeOperationMode.rawValue,
                 coordinateSource: activeCoordinatesForSaving(),
                 totalDistance: totalRouteDistance,
                 isClosedLoop: activeIsClosedLoop
+            ) else {
+                return nil
+            }
+            return SavableItemCandidate(
+                draft: draft,
+                sourceLabel: "活動中的內容"
             )
         }
         if hasReadyDraft {
-            return makeSavedLocationDraft(
+            guard let draft = makeSavedLocationDraft(
                 modeLabel: operationMode.rawValue,
                 coordinateSource: draftCoordinatesForSaving(),
                 totalDistance: draftTotalRouteDistance,
                 isClosedLoop: isClosedLoop
+            ) else {
+                return nil
+            }
+            return SavableItemCandidate(
+                draft: draft,
+                sourceLabel: "已完成草稿"
             )
         }
         return nil
+    }
+
+    private func preview(for candidate: SavableItemCandidate) -> CurrentSavableItemPreview {
+        CurrentSavableItemPreview(
+            kind: candidate.draft.kind,
+            sourceLabel: candidate.sourceLabel,
+            suggestedTitle: candidate.draft.title,
+            summaryText: saveSummaryText(
+                kind: candidate.draft.kind,
+                coordinates: candidate.draft.coordinates,
+                totalDistance: candidate.draft.totalDistance
+            ),
+            coordinates: candidate.draft.coordinates,
+            isAvailable: true
+        )
     }
 
     private func makeSavedLocationDraft(
@@ -822,6 +865,24 @@ final class AppViewModel {
             prefix = "迴路"
         }
         return "\(prefix) \(formatter.string(from: createdAt)) (\(String(format: "%.3f", coordinate.latitude)), \(String(format: "%.3f", coordinate.longitude)))"
+    }
+
+    private func saveSummaryText(
+        kind: SavedLocationKind,
+        coordinates: [CLLocationCoordinate2D],
+        totalDistance: CLLocationDistance
+    ) -> String {
+        switch kind {
+        case .point:
+            guard let coordinate = coordinates.first else { return "1 個點位" }
+            return String(
+                format: "座標 %.5f, %.5f",
+                coordinate.latitude,
+                coordinate.longitude
+            )
+        case .route, .loop:
+            return "\(coordinates.count) 點，\(String(format: "%.2f", totalDistance / 1000)) km"
+        }
     }
 
     // MARK: - Main action

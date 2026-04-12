@@ -1,8 +1,10 @@
 import SwiftUI
 
 struct SavedLocationSectionView: View {
+    let preview: CurrentSavableItemPreview
     let items: [SavedLocationItem]
     let sortMode: SavedLocationSortMode
+    let onSavePreview: () -> Void
     let onApply: (SavedLocationItem) -> Void
     let onFocus: (SavedLocationItem) -> Void
     let onRename: (SavedLocationItem) -> Void
@@ -10,6 +12,8 @@ struct SavedLocationSectionView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
+            previewCard
+
             Text("已儲存項目")
                 .font(.subheadline)
                 .fontWeight(.semibold)
@@ -40,6 +44,58 @@ struct SavedLocationSectionView: View {
                 .frame(minHeight: 180, maxHeight: 360)
             }
         }
+    }
+
+    private var previewCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("目前可儲存內容")
+                .font(.subheadline)
+                .fontWeight(.semibold)
+                .foregroundColor(ModernTheme.label)
+
+            if preview.isAvailable {
+                Text(preview.sourceSummaryText)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(preview.suggestedTitle)
+                        .font(.callout.weight(.semibold))
+                    Text(preview.summaryText)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+
+                Text("會先開啟命名視窗，你可以再修改名稱。")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+
+                Button(preview.actionTitle, action: onSavePreview)
+                    .buttonStyle(.borderedProminent)
+                    .tint(ModernTheme.accent)
+                    .controlSize(.small)
+            } else {
+                Text(preview.summaryText)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+
+                Button(preview.actionTitle, action: onSavePreview)
+                    .buttonStyle(.borderedProminent)
+                    .tint(ModernTheme.accent)
+                    .controlSize(.small)
+                    .disabled(true)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(ModernTheme.panel.opacity(0.92))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(ModernTheme.accent.opacity(preview.isAvailable ? 0.35 : 0.14), lineWidth: 1)
+        )
     }
 
     private var sectionModels: [SavedLocationSectionModel] {

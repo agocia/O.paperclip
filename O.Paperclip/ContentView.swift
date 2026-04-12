@@ -22,9 +22,10 @@ struct ContentView: View {
     @State var cameraPosition: MapCameraPosition
     @State var purePointOverlays: [PurePointOverlay]
     @State var purePointOverlayStates: [String: PurePointOverlayUIState]
-    @State var isImportingPurePointKML: Bool = false
     @State var isImportingGPXRoute: Bool = false
     @State var purePointImportError: String?
+    @State var purePointDropError: String?
+    @State var gpxDropError: String?
     @State var pendingImportedOverlays: [PurePointOverlay] = []
     @State var pendingImportedOverlayTitles: [String: String] = [:]
     @State var pendingImportedOverlaySourceURLs: [URL] = []
@@ -36,6 +37,7 @@ struct ContentView: View {
     @State var isRightSidebarVisible: Bool
     @State var savedLocationSortMode: SavedLocationSortMode
     let routeColors: [Color] = [.yellow, .orange, .mint, .pink]
+    let activeRouteColor = Color(red: 0.34, green: 0.80, blue: 0.98)
     private let purePointViewportActivationCount = AppConstants.PurePoint.viewportActivationCount
     private let purePointRenderedLimit = AppConstants.PurePoint.renderedLimit
     private let purePointViewportPadding = AppConstants.PurePoint.viewportPadding
@@ -151,13 +153,6 @@ struct ContentView: View {
         }
         .onChange(of: scenePhase) { _, newPhase in
             handleScenePhaseUpdate(newPhase)
-        }
-        .fileImporter(
-            isPresented: $isImportingPurePointKML,
-            allowedContentTypes: [.kml],
-            allowsMultipleSelection: true
-        ) { result in
-            handlePurePointImport(result)
         }
         .fileImporter(
             isPresented: $isImportingGPXRoute,
@@ -330,7 +325,7 @@ struct ContentView: View {
 
                         if let active = vm.activeRoutePolyline, active.pointCount > 1 {
                             MapPolyline(active)
-                                .stroke(Color(red: 0.08, green: 0.24, blue: 0.62), lineWidth: 5)
+                                .stroke(activeRouteColor, lineWidth: 5)
                         }
 
                         if !vm.routes.isEmpty {
@@ -352,7 +347,7 @@ struct ContentView: View {
                         if let current = vm.currentPosition {
                             Annotation("目前位置", coordinate: current) {
                                 Circle()
-                                    .fill(Color(red: 0.08, green: 0.24, blue: 0.62))
+                                    .fill(activeRouteColor)
                                     .frame(width: 18, height: 18)
                                     .overlay(Circle().stroke(Color.white, lineWidth: 3))
                                     .shadow(radius: 4)

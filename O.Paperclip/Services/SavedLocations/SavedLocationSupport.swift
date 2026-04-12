@@ -149,6 +149,46 @@ struct SavedLocationDraft {
     let sourceMode: String
 }
 
+struct CurrentSavableItemPreview {
+    let kind: SavedLocationKind?
+    let sourceLabel: String
+    let suggestedTitle: String
+    let summaryText: String
+    let coordinates: [CLLocationCoordinate2D]
+    let isAvailable: Bool
+
+    static let unavailable = CurrentSavableItemPreview(
+        kind: nil,
+        sourceLabel: "",
+        suggestedTitle: "",
+        summaryText: "先建立定點或路線，這裡就能儲存到本機。",
+        coordinates: [],
+        isAvailable: false
+    )
+
+    var kindDisplayName: String {
+        kind?.displayName ?? "項目"
+    }
+
+    var actionTitle: String {
+        switch kind {
+        case .point:
+            return "儲存這個定點"
+        case .route:
+            return "儲存這條線路"
+        case .loop:
+            return "儲存這個迴路"
+        case nil:
+            return "儲存目前項目"
+        }
+    }
+
+    var sourceSummaryText: String {
+        guard isAvailable else { return summaryText }
+        return "正在準備儲存：\(sourceLabel)的\(kindDisplayName)"
+    }
+}
+
 private struct SavedLocationSnapshot: Codable {
     let id: String
     let title: String

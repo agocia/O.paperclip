@@ -2,10 +2,13 @@ import SwiftUI
 
 struct ImportedGPXRouteSectionView: View {
     @Bindable var vm: AppViewModel
+    let importError: String?
     let onImport: () -> Void
+    let onDropURLs: ([URL]) -> Bool
     let onUse: (ImportedGPXRoute) -> Void
     let onFocus: (ImportedGPXRoute) -> Void
     let onRemove: (ImportedGPXRoute) -> Void
+    @State private var isDropTargeted = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -17,8 +20,12 @@ struct ImportedGPXRouteSectionView: View {
                     .controlSize(.small)
             }
 
-            if let error = vm.gpxImportError {
-                Text(error)
+            Text("可直接拖曳 .gpx 檔案到這裡")
+                .font(.caption)
+                .foregroundColor(.secondary)
+
+            if let importError {
+                Text(importError)
                     .font(.caption)
                     .foregroundColor(.red)
             }
@@ -38,6 +45,21 @@ struct ImportedGPXRouteSectionView: View {
                 .frame(minHeight: 120, maxHeight: 260)
             }
         }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(isDropTargeted ? ModernTheme.accent.opacity(0.10) : ModernTheme.inset.opacity(0.32))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(
+                    isDropTargeted ? ModernTheme.accent.opacity(0.9) : Color.black.opacity(0.08),
+                    lineWidth: isDropTargeted ? 1.6 : 1
+                )
+        )
+        .dropDestination(for: URL.self, action: { urls, _ in
+            onDropURLs(urls)
+        }, isTargeted: { isDropTargeted = $0 })
     }
 
     @ViewBuilder

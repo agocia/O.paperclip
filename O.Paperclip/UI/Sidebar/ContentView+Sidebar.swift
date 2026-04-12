@@ -1,5 +1,6 @@
 import SwiftUI
 import MapKit
+import AppKit
 
 extension ContentView {
     @ViewBuilder
@@ -194,6 +195,7 @@ extension ContentView {
     func handlePurePointImport(_ result: Result<[URL], Error>) {
         switch result {
         case .success(let urls):
+            purePointDropError = nil
             beginImportedPurePointOverlaySession(with: urls)
         case .failure(let error):
             resetPurePointImportSession()
@@ -201,9 +203,25 @@ extension ContentView {
         }
     }
 
+    func presentPurePointImportPanel() {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.allowedContentTypes = [.kml]
+        panel.title = "匯入 KML"
+        panel.message = "選擇要匯入的 KML 檔案"
+        panel.prompt = "匯入"
+
+        if panel.runModal() == .OK {
+            handlePurePointImport(.success(panel.urls))
+        }
+    }
+
     func handleGPXRouteImport(_ result: Result<[URL], Error>) {
         switch result {
         case .success(let urls):
+            gpxDropError = nil
             vm.prepareImportedGPXRoutes(from: urls)
         case .failure(let error):
             vm.resetImportedGPXRouteSession()
@@ -264,14 +282,16 @@ extension ContentView {
     func purePointControlsSection(isCompactSidebar: Bool) -> some View {
         PurePointControlsSectionView(
             overlayCount: purePointOverlays.count,
-            importError: purePointImportError,
+            importError: purePointDropError ?? purePointImportError,
             renderNotice: purePointRenderNotice,
             hasVisiblePoints: !visiblePurePoints.isEmpty,
             onImport: {
                 resetPurePointImportSession()
+                purePointDropError = nil
                 purePointImportError = nil
-                isImportingPurePointKML = true
+                presentPurePointImportPanel()
             },
+            onDropURLs: handlePurePointDrop,
             onFocusAll: focusAllPurePoints
         ) {
             ForEach(purePointOverlays) { overlay in
@@ -287,17 +307,20 @@ extension ContentView {
             onToggleVisibility: { isRightSidebarVisible = false },
             onCreateSavedItem: { vm.prepareSaveCurrentSelection() },
             noticeText: purePointRenderNotice,
-            errorText: vm.savedLocationError ?? purePointImportError ?? vm.gpxImportError
+            errorText: vm.savedLocationError
         ) {
             VStack(alignment: .leading, spacing: 16) {
                 purePointControlsSection(isCompactSidebar: false)
                 ImportedGPXRouteSectionView(
                     vm: vm,
+                    importError: gpxDropError ?? vm.gpxImportError,
                     onImport: {
                         vm.resetImportedGPXRouteSession()
+                        gpxDropError = nil
                         vm.gpxImportError = nil
                         isImportingGPXRoute = true
                     },
+                    onDropURLs: handleGPXDrop,
                     onUse: { route in
                         vm.useImportedGPXRoute(route)
                     },
@@ -311,8 +334,10 @@ extension ContentView {
             }
         } savedContent: {
             SavedLocationSectionView(
+                preview: vm.currentSavableItemPreview,
                 items: sortedSavedLocations,
                 sortMode: savedLocationSortMode,
+                onSavePreview: { vm.prepareSaveCurrentSelection() },
                 onApply: { item in
                     vm.applySavedLocation(item)
                 },
@@ -366,6 +391,61 @@ extension ContentView {
         )
     }
 
+    func handlePurePointDrop(_ urls: [URL]) -> Bool {
+        guard let validURLs = validatedDroppedFiles(
+            urls,
+            allowedExtension: "kml",
+            errorMessage: "這裡只能匯入 KML 檔案"
+        ) else {
+            return false
+        }
+
+        purePointDropError = nil
+        purePointImportError = nil
+        beginImportedPurePointOverlaySession(with: validURLs)
+        return true
+    }
+
+    func handleGPXDrop(_ urls: [URL]) -> Bool {
+        guard let validURLs = validatedDroppedFiles(
+            urls,
+            allowedExtension: "gpx",
+            errorMessage: "這裡只能匯入 GPX 檔案"
+        ) else {
+            return false
+        }
+
+        gpxDropError = nil
+        vm.gpxImportError = nil
+        vm.prepareImportedGPXRoutes(from: validURLs)
+        return true
+    }
+
+    private func validatedDroppedFiles(
+        _ urls: [URL],
+        allowedExtension: String,
+        errorMessage: String
+    ) -> [URL]? {
+        let localURLs = urls
+            .filter(\.isFileURL)
+            .map(\.standardizedFileURL)
+
+        let allValid = !localURLs.isEmpty && localURLs.allSatisfy {
+            $0.pathExtension.lowercased() == allowedExtension
+        }
+
+        guard allValid else {
+            if allowedExtension == "kml" {
+                purePointDropError = errorMessage
+            } else {
+                gpxDropError = errorMessage
+            }
+            return nil
+        }
+
+        return localURLs
+    }
+
     @ViewBuilder
     var movementSettingsSection: some View {
         MovementSettingsSectionView(
@@ -411,10 +491,11 @@ extension ContentView {
     }
 
     var saveCurrentLocationSheet: some View {
-        SavedLocationNamingSheet(
-            title: "儲存目前項目",
-            subtitle: "會把目前正在用的內容優先存下來；若沒有活動中的內容，則儲存已完成草稿。",
-            confirmTitle: "儲存",
+        let preview = vm.pendingSavedLocationPreview ?? vm.currentSavableItemPreview
+        return SavedLocationNamingSheet(
+            title: "儲存\(preview.kindDisplayName)",
+            subtitle: "正在儲存：\(preview.sourceLabel)的\(preview.kindDisplayName)。\(preview.summaryText)",
+            confirmTitle: preview.actionTitle,
             errorText: vm.savedLocationError,
             name: Binding(
                 get: { vm.pendingSavedLocationTitle },
