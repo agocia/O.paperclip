@@ -1,176 +1,238 @@
 # O.Paperclip
 
-**A macOS GPS spoofing tool built specifically for Mac users, allowing you to inject simulated coordinates into an iPhone or iPad over USB or Wi-Fi.**
+**A macOS GPS spoofing tool for iPhone and iPad**, built for real devices over USB or Wi-Fi. It supports pinning a fixed location, A-B routing, multi-point routes, imported fixed routes, joystick control, and KML-based PurePoint overlays.
 
-Chinese version: [README.md](./README.md)
+<p align="right">
+  <a href="README.md"><img alt="繁體中文" src="https://img.shields.io/badge/繁體中文-gray?style=flat-square"></a>
+  <a href="README.en.md"><img alt="English" src="https://img.shields.io/badge/English-active-2d3748?style=flat-square"></a>
+</p>
 
-**Before using this app: your iPhone / iPad must have Developer Mode enabled.**  
-**If this project helps you, you can support its development here: Ko-fi: https://ko-fi.com/agocia**
+> ### Project Status
+>
+> O.Paperclip is an independently maintained open-source project, not a commercial product. It is actively improved, but it should still be treated as a practical tool that evolves with macOS, iOS, and `pymobiledevice3`, not as a guaranteed appliance for every environment.
+>
+> - The app is designed specifically for macOS-based iPhone / iPad GPS simulation.
+> - Stability depends on iOS version, Developer Mode, trust pairing, and your USB / Wi-Fi environment.
+> - If you hit a bug, please include your device model, iOS version, connection method, and visible error message when reporting it.
+> - The project is provided as-is, without guaranteed long-term maintenance.
 
----
+## Highlights
+
+### Simulation Modes
+
+| Mode | Description |
+| --- | --- |
+| **Pin** | Keep the device fixed at a single coordinate |
+| **A-B** | Pick a start and end point, calculate a route, and move along it |
+| **Multi-Point** | Move through multiple custom route points in order |
+| **Joystick** | Push the current position live with arrow keys or WASD |
+| **Imported Fixed Route** | Apply a GPX route from the right-side import panel |
+
+### Route and Map Features
+
+- Draft routes and active routes both show clear start / end markers.
+- Closed loops collapse into a single `Start / End` marker to avoid overlap.
+- Drafts show one-way ETA before movement starts.
+- Active routes show live remaining time during movement.
+- Saved points and routes automatically switch the app to a compatible mode when applied.
+- GPX imported routes and KML PurePoint overlays are supported.
+
+### Connection Behavior
+
+- Supports both **USB** and **Wi-Fi tunnel** connections.
+- USB hot-unplug is detected proactively, the simulation is stopped immediately, and auto-reconnect starts automatically.
+- Tunnel failures and send failures continue to use the existing reconnect flow.
+- You can switch between USB and Wi-Fi while the app is running.
 
 ## Requirements
 
 | Item | Requirement |
-|------|-------------|
+| --- | --- |
 | macOS | macOS 14 Sonoma or later |
-| iPhone / iPad | iOS 16 or later, with Developer Mode enabled |
-| Connection | USB or Wi-Fi (same network) |
-| Other | No need to install Python, Homebrew, or any extra packages |
-
----
+| iPhone / iPad | iOS 16 or later |
+| Device setup | Developer Mode enabled and trusted with this Mac |
+| Connection | USB or Wi-Fi on the same network |
+| Other | No separate Python, Homebrew, or `pymobiledevice3` install required |
 
 ## Installation
 
-### Option 1: Download the DMG (Recommended)
+### Download
 
-1. Go to the [Releases](../../releases) page and download the latest `O.Paperclip.dmg`
-2. Open the DMG and drag `O.Paperclip.app` into the `Applications` folder
-3. When launching it for the first time, right-click the app, choose `Open`, and confirm to bypass Gatekeeper
+1. Go to [Releases](../../releases) and download the latest build.
+2. Open the `.dmg` and drag `O.Paperclip.app` into `Applications`.
+3. If Gatekeeper blocks first launch, right-click the app in Finder and choose `Open`.
 
-### Option 2: Build from Source
+### Build From Source
 
 ```bash
-git clone https://github.com/agocia/O.Paperclip.git
-cd O.Paperclip
+git clone https://github.com/agocia/O.paperclip.git
+cd O.paperclip
 xcodebuild -project O.Paperclip.xcodeproj -scheme O.Paperclip -configuration Release build
 ```
 
----
-
 ## Before You Start
 
-### iPhone / iPad Setup
+### 1. Enable Developer Mode on the iPhone / iPad
 
-1. **Enable Developer Mode** (iOS 16+)  
-   Go to `Settings` → `Privacy & Security` → `Developer Mode` → turn it on → restart the device
+Go to `Settings` → `Privacy & Security` → `Developer Mode`, then restart the device.
 
-2. **Trust this Mac** (first USB connection)  
-   After connecting via USB, your iPhone will ask whether to trust this computer. Tap `Trust` and enter your passcode.
+### 2. Complete one USB trust pairing first
 
-3. **Extra step for Wi-Fi connection**  
-   You must complete the trust pairing once over USB before switching to Wi-Fi mode.
+When you connect by USB for the first time, iPhone / iPad must trust this Mac.
 
----
+### 3. Use USB once before Wi-Fi
 
-## How to Use
+Wi-Fi tunnel depends on the existing trust pairing, so first-time setup still starts with USB.
 
-### Step 1: Connect Your Device
+## Quick Start
 
-**USB connection (default):**
-1. Connect your iPhone / iPad with a USB cable
-2. Open O.Paperclip
-3. In the sidebar, make sure `USB` is selected in the connection mode switcher
-4. Click `Start Connection`
-5. If prompted, enter your Mac administrator password (required to create the tunnel)
+### 1. Connect the Device
 
-**Wi-Fi connection:**
-1. Make sure your iPhone and Mac are on the same Wi-Fi network
-2. Open O.Paperclip
-3. Switch the connection mode in the sidebar to `Wi-Fi`
-4. Click `Start Connection`
+**USB**
 
-> If your device is already connected over USB, you can switch directly to Wi-Fi. The app will automatically disconnect the current session and rebuild the tunnel over Wi-Fi.
+1. Connect the iPhone / iPad with a cable.
+2. Open O.Paperclip.
+3. Make sure the connection mode is set to `USB`.
+4. Click `Start Connection`.
+5. Enter the macOS administrator password if prompted.
 
-> After a successful connection, the sidebar will show `Connected` along with the device name.  
-> If the USB cable is unplugged or the Wi-Fi tunnel is interrupted, the app will proactively detect the disconnect, stop the current simulation immediately, show a warning in the sidebar, and then automatically try to reconnect.
+**Wi-Fi**
 
----
+1. Make sure the device and Mac are on the same network.
+2. Switch the connection mode to `Wi-Fi`.
+3. Click `Start Connection`.
 
-### Step 2: Choose an Operation Mode
+After a successful connection, the sidebar shows the device name and connection state. If USB is unplugged or the tunnel drops, the app detects the disconnect, stops simulation, shows a warning, and starts auto-reconnect.
 
-Use the segmented control at the top of the sidebar to switch between four modes:
+### 2. Choose a Mode
 
-| Mode | Description |
-|------|-------------|
-| **A-B** | Click a start point A and an end point B on the map, and the app will calculate a route and move along it automatically |
-| **Pin** | Stay fixed at a single selected coordinate on the map |
-| **Multi-Point** | Select multiple route points in order and move through them one by one |
-| **Joystick** | Push the current position live with the arrow keys or WASD |
+The mode picker currently shows four modes:
 
-> `Fixed Route` no longer appears in the mode picker. Use the `Import & Saved` panel on the right to import or apply it.
+- `A-B`
+- `Pin`
+- `Multi-Point`
+- `Joystick`
 
----
+`Fixed Route` no longer appears in the mode picker. Use the right-side `Import & Saved` panel instead.
 
-### Step 3: Set the Location
+### 3. Set a Location and Start
 
-**A-B Route Mode:**
-1. Click the map to set point A, then click `Confirm A`
-2. Click the map to set point B, then click `Confirm B`
-3. Choose a route and click `Start Moving`
-4. Adjust speed (km/h) and whether the route should loop
+**A-B**
 
-**Pin Mode:**
-1. Click the target location on the map
-2. Click `Pin This Location`
-3. GPS will stay fixed at that point
+1. Pick point A on the map.
+2. Confirm point A.
+3. Pick point B.
+4. Confirm point B and choose a route.
+5. Click `Start Moving`.
 
-**Multi-Point Mode:**
-1. Click multiple route points on the map in order
-2. Click `Start Moving`
+**Pin**
 
-> You can also type an address or place name in the search bar to jump directly to a location.
-> Both route drafts and the active blue route clearly mark the start and end on the map; closed loops use a single `Start / End` marker.
-> Active routes show live remaining time, while inactive drafts show the one-way estimated time.
+1. Pick a location on the map.
+2. Click `Pin This Location`.
 
-### Saved Items
+**Multi-Point**
 
-The right-side `Import & Saved` panel can store the current pin or route. When you later click `Apply`, the app automatically switches to a compatible mode:
+1. Add multiple route points in order.
+2. Click `Start Moving`.
 
-- Saved point -> switches to `Pin`
-- Saved A-B route -> switches to `A-B`
-- Saved multi-point or imported fixed route -> switches to `Multi-Point`
-- Saved loop -> switches to `Multi-Point` and turns on closed-loop mode
+**Joystick**
 
----
+1. Start joystick control.
+2. Move with arrow keys or `WASD`.
 
-### Step 4: Stop Spoofing
+### 4. Stop or Clear
 
-Click `Stop` or `Clear Route` to stop GPS spoofing and return the device to its real location.
+- `Stop`: stop the current simulation.
+- `Clear Route` / `Clear Location`: clear the current draft or pinned state.
 
----
+## Import and Saved Items
+
+The right-side `Import & Saved` panel handles:
+
+- Saved points
+- Saved A-B routes
+- Saved multi-point routes
+- Saved loop routes
+- Imported GPX fixed routes
+- Imported KML PurePoint overlays
+
+### Saved Item Mapping
+
+When you click `Apply`, the app switches automatically:
+
+- Saved point → `Pin`
+- Saved A-B route → `A-B`
+- Saved multi-point route → `Multi-Point`
+- Saved fixed-route source → `Multi-Point`
+- Saved loop → `Multi-Point` with closed-loop enabled
 
 ## PurePoint Overlay
 
-You can import KML geographic data and display custom markers on the map:
+PurePoint overlays let you display custom KML-based points on the map:
 
-1. Click `Import KML` in the sidebar
-2. Select a `.kml` file
-3. The overlay will appear on the map, and you can filter markers by category
-
----
+1. Click `Import KML`.
+2. Select a `.kml` file.
+3. Filter imported categories on the map as needed.
 
 ## Troubleshooting
 
-**Q: The app keeps loading after I click "Start Connection".**  
-A: Make sure the iPhone is unlocked and the Mac is trusted. For Wi-Fi mode, confirm both devices are on the same network.
+### The app keeps spinning after I click Start Connection
 
-**Q: Why am I asked for the administrator password?**  
-A: This is expected. Creating the tunnel requires temporary root privileges.
+Check the following:
 
-**Q: Wi-Fi connection failed and it switched back to USB.**  
-A: The app automatically falls back to USB. If you want Wi-Fi specifically, make sure both devices are on the same network and your firewall is not blocking the connection.
+- The device is unlocked
+- This Mac is trusted
+- Developer Mode is enabled
+- For Wi-Fi, both devices are on the same subnet
 
-**Q: I am already connected over USB. Can I switch directly to Wi-Fi?**  
-A: Yes. Just change the connection mode in the sidebar to `Wi-Fi`, and the app will automatically disconnect the current USB session and rebuild the tunnel over Wi-Fi.
+### Why does the app ask for my administrator password?
 
-**Q: Why does the app stop moving after I unplug the phone?**  
-A: This is expected. The app actively checks whether the USB device is still present; once it confirms the disconnect, it stops the simulation immediately, shows `Device disconnected, simulation stopped` in the sidebar, and then tries to reconnect automatically.
+Tunnel setup needs temporary elevated privileges. This is expected.
 
-**Q: GPS did not return to normal after stopping.**  
-A: Click `Clear Location Points` or restart location services on the iPhone.
+### Why does movement stop when I unplug the cable?
 
-**Q: Connection fails on iOS 17 or later.**  
-A: Make sure Developer Mode is enabled and that the device has already been trusted in Xcode or Finder.
+This is expected. The app actively checks whether the USB device is still present. Once it confirms the disconnect, it stops simulation, shows `Device disconnected, simulation stopped, reconnecting...`, and starts auto-reconnect.
 
----
+### Can I switch to Wi-Fi after connecting over USB?
+
+Yes. Switching to `Wi-Fi` disconnects the active USB session and rebuilds the connection over Wi-Fi.
+
+### GPS did not return to normal after stopping
+
+Try clearing the location again, or restart location services on the device.
+
+## Development
+
+### Build
+
+```bash
+xcodebuild -project O.Paperclip.xcodeproj -scheme O.Paperclip -configuration Debug build
+```
+
+### Test
+
+```bash
+xcodebuild -project O.Paperclip.xcodeproj -scheme O.Paperclip test
+```
+
+## Project Structure
+
+```text
+O.Paperclip/
+├── O.Paperclip/
+│   ├── Core/
+│   ├── Services/
+│   ├── UI/
+│   └── ContentView.swift
+├── O.PaperclipTests/
+├── bundled/
+└── O.Paperclip.xcodeproj
+```
 
 ## Disclaimer
 
-This tool is intended only for legitimate use cases such as development testing and privacy protection. Do not use it for fraud, game cheating, or any activity that violates terms of service. Users are solely responsible for their actions.
-
----
+This tool is intended for development testing, privacy protection, and other legitimate use cases. Do not use it for cheating, fraud, or any activity that violates platform terms or local laws. You are solely responsible for how you use it.
 
 ## License
 
-MIT License - see [LICENSE](LICENSE)
+MIT License. See [LICENSE](LICENSE).
