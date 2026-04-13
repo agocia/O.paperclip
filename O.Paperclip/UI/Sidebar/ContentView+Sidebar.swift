@@ -79,7 +79,7 @@ extension ContentView {
 
     var operationModePicker: some View {
         Picker("模式", selection: $vm.operationMode) {
-            ForEach(OperationMode.allCases) { mode in
+            ForEach(OperationMode.selectableCases) { mode in
                 Text(mode.rawValue).tag(mode)
             }
         }
@@ -155,6 +155,9 @@ extension ContentView {
     }
 
     func handleOperationModeChange() {
+        if vm.consumeProgrammaticModeResetSuppression() {
+            return
+        }
         vm.switchModePreservingPinnedLocation()
     }
 

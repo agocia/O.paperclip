@@ -323,9 +323,19 @@ struct ContentView: View {
                             }
                         }
 
+                        ForEach(vm.draftRouteEndpointMarkers) { marker in
+                            Marker(marker.title, coordinate: marker.coordinate)
+                                .tint(routeEndpointTint(for: marker.style))
+                        }
+
                         if let active = vm.activeRoutePolyline, active.pointCount > 1 {
                             MapPolyline(active)
                                 .stroke(activeRouteColor, lineWidth: 5)
+                        }
+
+                        ForEach(vm.activeRouteEndpointMarkers) { marker in
+                            Marker(marker.title, coordinate: marker.coordinate)
+                                .tint(routeEndpointTint(for: marker.style))
                         }
 
                         if !vm.routes.isEmpty {
@@ -489,6 +499,23 @@ struct ContentView: View {
             return .right
         default:
             return nil
+        }
+    }
+
+    private func routeEndpointTint(for style: RouteEndpointMarkerStyle) -> Color {
+        switch style {
+        case .draftStart:
+            return .yellow
+        case .draftEnd:
+            return .orange
+        case .draftStartEnd:
+            return .pink
+        case .activeStart:
+            return activeRouteColor
+        case .activeEnd:
+            return .indigo
+        case .activeStartEnd:
+            return .purple
         }
     }
 

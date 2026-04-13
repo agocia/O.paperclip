@@ -73,19 +73,22 @@ xcodebuild -project O.Paperclip.xcodeproj -scheme O.Paperclip -configuration Rel
 > If your device is already connected over USB, you can switch directly to Wi-Fi. The app will automatically disconnect the current session and rebuild the tunnel over Wi-Fi.
 
 > After a successful connection, the sidebar will show `Connected` along with the device name.  
-> If the USB cable is unplugged or the Wi-Fi tunnel is interrupted, the app will automatically switch to a disconnected state and stop continuous movement until you reconnect.
+> If the USB cable is unplugged or the Wi-Fi tunnel is interrupted, the app will proactively detect the disconnect, stop the current simulation immediately, show a warning in the sidebar, and then automatically try to reconnect.
 
 ---
 
 ### Step 2: Choose an Operation Mode
 
-Use the segmented control at the top of the sidebar to switch between three modes:
+Use the segmented control at the top of the sidebar to switch between four modes:
 
 | Mode | Description |
 |------|-------------|
 | **A-B** | Click a start point A and an end point B on the map, and the app will calculate a route and move along it automatically |
 | **Pin** | Stay fixed at a single selected coordinate on the map |
 | **Multi-Point** | Select multiple route points in order and move through them one by one |
+| **Joystick** | Push the current position live with the arrow keys or WASD |
+
+> `Fixed Route` no longer appears in the mode picker. Use the `Import & Saved` panel on the right to import or apply it.
 
 ---
 
@@ -107,6 +110,17 @@ Use the segmented control at the top of the sidebar to switch between three mode
 2. Click `Start Moving`
 
 > You can also type an address or place name in the search bar to jump directly to a location.
+> Both route drafts and the active blue route clearly mark the start and end on the map; closed loops use a single `Start / End` marker.
+> Active routes show live remaining time, while inactive drafts show the one-way estimated time.
+
+### Saved Items
+
+The right-side `Import & Saved` panel can store the current pin or route. When you later click `Apply`, the app automatically switches to a compatible mode:
+
+- Saved point -> switches to `Pin`
+- Saved A-B route -> switches to `A-B`
+- Saved multi-point or imported fixed route -> switches to `Multi-Point`
+- Saved loop -> switches to `Multi-Point` and turns on closed-loop mode
 
 ---
 
@@ -141,7 +155,7 @@ A: The app automatically falls back to USB. If you want Wi-Fi specifically, make
 A: Yes. Just change the connection mode in the sidebar to `Wi-Fi`, and the app will automatically disconnect the current USB session and rebuild the tunnel over Wi-Fi.
 
 **Q: Why does the app stop moving after I unplug the phone?**  
-A: This is normal behavior. When the tunnel or device connection is interrupted, the app immediately marks the device as disconnected and stops the simulation to avoid fake movement continuing in the background.
+A: This is expected. The app actively checks whether the USB device is still present; once it confirms the disconnect, it stops the simulation immediately, shows `Device disconnected, simulation stopped` in the sidebar, and then tries to reconnect automatically.
 
 **Q: GPS did not return to normal after stopping.**  
 A: Click `Clear Location Points` or restart location services on the iPhone.

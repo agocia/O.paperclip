@@ -6,6 +6,7 @@ protocol DeviceControlling: AnyObject {
     var connectionState: DeviceConnectionState { get }
     var logEntries: [String] { get }
     var lastSentCoordinate: CLLocationCoordinate2D? { get }
+    var connectionNotice: String? { get }
 
     var debugLog: [String] { get }
     var isConnected: Bool { get }
@@ -36,6 +37,7 @@ protocol DeviceControlling: AnyObject {
 extension DeviceControlling {
     var logEntries: [String] { debugLog }
     var lastSentCoordinate: CLLocationCoordinate2D? { nil }
+    var connectionNotice: String? { nil }
 
     func connect() {
         connectDevice()

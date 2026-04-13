@@ -8,6 +8,10 @@ enum OperationMode: String, CaseIterable, Identifiable {
     case fixedRoute = "固定路線"
 
     var id: String { rawValue }
+
+    static var selectableCases: [OperationMode] {
+        [.routeAB, .fixedPoint, .multiPoint, .joystick]
+    }
 }
 
 enum DeviceConnectionState: Equatable {
@@ -68,4 +72,3 @@ enum DeviceConnectionState: Equatable {
         return "正在連線"
     }
 }
-

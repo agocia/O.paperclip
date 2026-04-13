@@ -517,6 +517,7 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
     @Published private(set) var connectionState: DeviceConnectionState = .disconnected
     @Published private(set) var deviceName: String = "未連接"
     @Published private(set) var lastError: String?
+    @Published private(set) var connectionNotice: String?
     @Published var manualRsdHost: String = "" {
         didSet { UserDefaults.standard.set(manualRsdHost, forKey: Self.manualRsdHostKey) }
     }
@@ -578,6 +579,9 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
     private var userInitiatedDisconnect = false
     private var expectedDvtStreamExit = false
     private var sentLocationCount: Int = 0
+    private var connectionHealthTimer: DispatchSourceTimer?
+    private var currentConnectedDeviceKey: String?
+    private var healthMonitorMissingCount: Int = 0
     private var activeTunnelConnectionType: TunnelConnectionType?
     private var tunnelRequiresAdmin = false
     private var pendingConnectionDeviceKey: String?
@@ -612,6 +616,7 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
 
     deinit {
         cancelAutoReconnect()
+        stopConnectionHealthMonitor(clearTrackedDevice: true)
         stopTunnel()
     }
 
@@ -639,8 +644,10 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
 
     private func connectDeviceInternal(autoTriggered: Bool, force: Bool) {
         guard force || !isConnected else { return }
+        stopConnectionHealthMonitor(clearTrackedDevice: false)
         if !autoTriggered {
             cancelAutoReconnect()
+            setConnectionNotice(nil)
             appendLog("開始連線 Apple 裝置")
             setConnectionState(.connecting(step: "初始化"), deviceName: "連線中…", lastError: nil)
         } else {
@@ -700,8 +707,11 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
                     ])
                 }
                 let deviceLabel = self.connectedDeviceLabel(using: cmd)
+                let connectedDeviceKey = self.resolveCurrentConnectedDeviceKey(using: cmd)
 
                 self.setConnectionState(.connected, deviceName: "\(deviceLabel) (RSD: \(ep.host):\(ep.port))", lastError: nil)
+                self.setConnectionNotice(nil)
+                self.startConnectionHealthMonitor(using: cmd, deviceKey: connectedDeviceKey)
 #if DEBUG
                 print("✅ Tunnel OK: \(DeviceLogRedactor.maskedEndpoint(host: ep.host, port: ep.port))")
 #endif
@@ -1028,6 +1038,93 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
         return (try? resolveConnectedDeviceLabel(using: cmd, preferredUDID: effectiveTunnelUDID)) ?? "Apple Device"
     }
 
+    private func resolveCurrentConnectedDeviceKey(using cmd: [String]) -> String? {
+        guard effectiveTunnelConnectionType == .usb else {
+            currentConnectedDeviceKey = nil
+            return nil
+        }
+
+        let deviceKey =
+            pendingConnectionDeviceKey ??
+            effectiveTunnelUDID ??
+            (try? preferredActiveDeviceUDID(using: cmd))
+
+        currentConnectedDeviceKey = deviceKey
+        return deviceKey
+    }
+
+    private func startConnectionHealthMonitor(using cmd: [String], deviceKey: String?) {
+        stopConnectionHealthMonitor(clearTrackedDevice: false)
+
+        guard effectiveTunnelConnectionType == .usb,
+              let deviceKey,
+              !deviceKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            currentConnectedDeviceKey = nil
+            return
+        }
+
+        healthMonitorMissingCount = 0
+        currentConnectedDeviceKey = deviceKey
+
+        let timer = DispatchSource.makeTimerSource(queue: connectionQueue)
+        timer.schedule(
+            deadline: .now() + AppConstants.DeviceStream.healthCheckInterval,
+            repeating: AppConstants.DeviceStream.healthCheckInterval
+        )
+        timer.setEventHandler { [weak self] in
+            self?.performConnectionHealthCheck(using: cmd, deviceKey: deviceKey)
+        }
+        connectionHealthTimer = timer
+        timer.resume()
+        appendLog("已啟動 USB 熱插拔監看")
+    }
+
+    private func stopConnectionHealthMonitor(clearTrackedDevice: Bool) {
+        connectionHealthTimer?.setEventHandler {}
+        connectionHealthTimer?.cancel()
+        connectionHealthTimer = nil
+        healthMonitorMissingCount = 0
+        if clearTrackedDevice {
+            currentConnectedDeviceKey = nil
+        }
+    }
+
+    private func performConnectionHealthCheck(using cmd: [String], deviceKey: String) {
+        guard !userInitiatedDisconnect else { return }
+        guard autoReconnectWorkItem == nil else { return }
+        guard !isConnectionInFlight else { return }
+        guard connectionState.isConnected else { return }
+        guard currentConnectedDeviceKey == deviceKey else { return }
+        guard effectiveTunnelConnectionType == .usb else { return }
+
+        do {
+            let devices = try listConnectedDevicesForHealthMonitor(using: cmd)
+            let isStillConnected = devices.contains { matchesDevice($0, requestedUDID: deviceKey) }
+            if isStillConnected {
+                healthMonitorMissingCount = 0
+                return
+            }
+
+            healthMonitorMissingCount += 1
+            appendLog("USB 連線監看未找到目前裝置（\(healthMonitorMissingCount)/\(AppConstants.DeviceStream.healthCheckMissingThreshold)）")
+
+            if healthMonitorMissingCount >= AppConstants.DeviceStream.healthCheckMissingThreshold {
+                healthMonitorMissingCount = 0
+                handleConfirmedConnectionLoss(reason: "USB 裝置已拔除或中斷")
+            }
+        } catch {
+            appendLog("USB 連線監看暫時略過：\(error.localizedDescription)")
+        }
+    }
+
+    private func listConnectedDevicesForHealthMonitor(using cmd: [String]) throws -> [USBMuxDevice] {
+        let raw = try runWithTimeout(
+            cmd + ["usbmux", "list"],
+            timeout: AppConstants.DeviceStream.healthCheckTimeout
+        )
+        return decodeUSBMuxDevices(from: raw)
+    }
+
     private func startTunnelWithAdminPrompt(using cmd: [String], udid: String?) throws {
         var failures: [String] = []
         let candidates: [String?] = udid == nil ? [nil] : [udid, nil]
@@ -1265,6 +1362,8 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
     func disconnect() {
         userInitiatedDisconnect = true
         cancelAutoReconnect()
+        stopConnectionHealthMonitor(clearTrackedDevice: true)
+        setConnectionNotice(nil)
         clearSimulatedLocation()
         stopTunnel()
         setConnectionState(.disconnected, deviceName: "未連接", lastError: nil)
@@ -1691,6 +1790,7 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
         simulateLocationMode = nil
         activeTunnelConnectionType = nil
         pendingConnectionDeviceKey = nil
+        stopConnectionHealthMonitor(clearTrackedDevice: false)
         stopSendPipelineSynchronously()
 
         tunnelOutPipe?.fileHandleForReading.readabilityHandler = nil
@@ -1715,10 +1815,16 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
     }
 
     private func handleUnexpectedConnectionLoss(reason: String) {
+        handleConfirmedConnectionLoss(reason: reason)
+    }
+
+    private func handleConfirmedConnectionLoss(reason: String) {
         guard !userInitiatedDisconnect else { return }
         guard rsdEndpoint != nil || connectionState.isConnected else { return }
+
         appendLog("連線中斷：\(reason)")
         stopTunnel()
+        setConnectionNotice("已偵測裝置掉線，模擬已停止，正在嘗試重新連線。")
         setConnectionState(.failed, deviceName: "連線已中斷", lastError: reason)
         scheduleAutoReconnect(reason: reason)
     }
@@ -1797,6 +1903,12 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
                 self.deviceName = deviceName
             }
             self.lastError = lastError.map(DeviceLogRedactor.sanitizedMessage)
+        }
+    }
+
+    private func setConnectionNotice(_ notice: String?) {
+        DispatchQueue.main.async {
+            self.connectionNotice = notice
         }
     }
 

@@ -10,6 +10,7 @@ private final class MockDeviceManager: DeviceControlling {
     var connectionState: DeviceConnectionState = .disconnected
     var logEntries: [String] { debugLog }
     var lastSentCoordinate: CLLocationCoordinate2D?
+    var connectionNotice: String?
     var sentCoordinates: [CLLocationCoordinate2D] = []
     var debugLog: [String] = []
     var isConnected: Bool = false
@@ -880,5 +881,153 @@ struct O_PaperclipTests {
         #expect(preview.sourceLabel == "活動中的內容")
         #expect(preview.actionTitle == "儲存這條線路")
         #expect(preview.summaryText.contains("2 點"))
+    }
+
+    @MainActor
+    @Test func applyingSavedABRoutePreservesLoadedDraftAcrossModeChange() throws {
+        let vm = AppViewModel(
+            deviceManager: MockDeviceManager(),
+            locationSearchService: MockLocationSearchService()
+        )
+
+        vm.operationMode = .joystick
+
+        let item = SavedLocationItem(
+            id: "saved-ab",
+            title: "A-B 收藏",
+            kind: .route,
+            coordinates: [
+                CLLocationCoordinate2D(latitude: 25.0330, longitude: 121.5654),
+                CLLocationCoordinate2D(latitude: 25.0340, longitude: 121.5664),
+                CLLocationCoordinate2D(latitude: 25.0350, longitude: 121.5674)
+            ],
+            totalDistance: 320,
+            createdAt: Date(),
+            regionGroup: .taiwan,
+            sourceMode: OperationMode.routeAB.rawValue,
+            sourceFilePath: "/tmp/saved-ab.json"
+        )
+
+        vm.applySavedLocation(item)
+
+        if !vm.consumeProgrammaticModeResetSuppression() {
+            vm.switchModePreservingPinnedLocation()
+        }
+
+        #expect(vm.operationMode == .routeAB)
+        #expect(vm.appState == .readyToMove)
+        #expect(vm.pointA?.latitude == item.coordinates.first?.latitude)
+        #expect(vm.pointB?.longitude == item.coordinates.last?.longitude)
+        #expect(vm.draftRoutePoints.count == item.coordinates.count)
+    }
+
+    @MainActor
+    @Test func applyingSavedFixedRouteMapsToMultiPoint() throws {
+        let vm = AppViewModel(
+            deviceManager: MockDeviceManager(),
+            locationSearchService: MockLocationSearchService()
+        )
+
+        let item = SavedLocationItem(
+            id: "saved-fixed-route",
+            title: "固定路線收藏",
+            kind: .route,
+            coordinates: [
+                CLLocationCoordinate2D(latitude: 25.0400, longitude: 121.5700),
+                CLLocationCoordinate2D(latitude: 25.0410, longitude: 121.5710)
+            ],
+            totalDistance: 180,
+            createdAt: Date(),
+            regionGroup: .taiwan,
+            sourceMode: OperationMode.fixedRoute.rawValue,
+            sourceFilePath: "/tmp/saved-fixed-route.json"
+        )
+
+        vm.applySavedLocation(item)
+
+        #expect(vm.operationMode == .multiPoint)
+        #expect(vm.appState == .readyToMove)
+        #expect(vm.isClosedLoop == false)
+        #expect(vm.draftRoutePoints.count == 2)
+    }
+
+    @MainActor
+    @Test func applyingSavedLoopMapsToClosedMultiPoint() throws {
+        let vm = AppViewModel(
+            deviceManager: MockDeviceManager(),
+            locationSearchService: MockLocationSearchService()
+        )
+
+        let loopStart = CLLocationCoordinate2D(latitude: 25.0330, longitude: 121.5654)
+        let item = SavedLocationItem(
+            id: "saved-loop",
+            title: "閉圈收藏",
+            kind: .loop,
+            coordinates: [
+                loopStart,
+                CLLocationCoordinate2D(latitude: 25.0340, longitude: 121.5664),
+                loopStart
+            ],
+            totalDistance: 420,
+            createdAt: Date(),
+            regionGroup: .taiwan,
+            sourceMode: OperationMode.multiPoint.rawValue,
+            sourceFilePath: "/tmp/saved-loop.json"
+        )
+
+        vm.isEndlessLoop = true
+        vm.applySavedLocation(item)
+
+        #expect(vm.operationMode == .multiPoint)
+        #expect(vm.isClosedLoop)
+        #expect(vm.isEndlessLoop == false)
+        #expect(vm.draftRoutePoints.first?.latitude == loopStart.latitude)
+    }
+
+    @MainActor
+    @Test func activeTravelTimeSummaryUsesRemainingDistance() throws {
+        let vm = AppViewModel(
+            deviceManager: MockDeviceManager(),
+            locationSearchService: MockLocationSearchService()
+        )
+
+        vm.speed = 6.0
+        vm.activeOperationMode = .fixedRoute
+        vm.currentRoutePoints = [
+            CLLocationCoordinate2D(latitude: 25.0330, longitude: 121.5654),
+            CLLocationCoordinate2D(latitude: 25.0340, longitude: 121.5664)
+        ]
+        vm.totalRouteDistance = 600
+        vm.traveledDistance = 120
+        var coordinates = vm.currentRoutePoints
+        vm.activeRoutePolyline = MKPolyline(coordinates: &coordinates, count: coordinates.count)
+
+        let summary = vm.travelTimeSummary
+
+        #expect(summary?.label == "剩餘")
+        #expect(summary?.distance == 480)
+        #expect(summary?.timeText == "4 分 48 秒")
+    }
+
+    @MainActor
+    @Test func closedLoopEndpointMarkersCollapseIntoSingleMarker() throws {
+        let vm = AppViewModel(
+            deviceManager: MockDeviceManager(),
+            locationSearchService: MockLocationSearchService()
+        )
+
+        let start = CLLocationCoordinate2D(latitude: 25.0330, longitude: 121.5654)
+        vm.operationMode = .multiPoint
+        vm.isClosedLoop = true
+        vm.draftRoutePoints = [
+            start,
+            CLLocationCoordinate2D(latitude: 25.0340, longitude: 121.5664),
+            start
+        ]
+
+        let draftMarkers = vm.draftRouteEndpointMarkers
+
+        #expect(draftMarkers.count == 1)
+        #expect(draftMarkers.first?.title == "草稿起點／終點")
     }
 }

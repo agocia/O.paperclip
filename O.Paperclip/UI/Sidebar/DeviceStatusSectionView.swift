@@ -62,6 +62,16 @@ struct DeviceStatusSectionView: View {
                     .foregroundColor(.secondary)
             }
 
+            if let notice = vm.deviceManager.connectionNotice, !notice.isEmpty {
+                Text(notice)
+                    .font(.caption.weight(.semibold))
+                    .foregroundColor(Color.orange)
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.orange.opacity(0.12))
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            }
+
             if !vm.deviceManager.debugLog.isEmpty && !vm.isActiveSimulationRunning {
                 debugLogPanel
             }

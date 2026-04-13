@@ -22,6 +22,31 @@ private struct SavableItemCandidate {
     let sourceLabel: String
 }
 
+struct RouteTimeSummary {
+    let label: String
+    let distance: CLLocationDistance
+    let timeText: String
+}
+
+enum RouteEndpointMarkerStyle: String {
+    case draftStart
+    case draftEnd
+    case draftStartEnd
+    case activeStart
+    case activeEnd
+    case activeStartEnd
+}
+
+struct RouteEndpointMarker: Identifiable {
+    let style: RouteEndpointMarkerStyle
+    let title: String
+    let coordinate: CLLocationCoordinate2D
+
+    var id: String {
+        "\(style.rawValue)-\(coordinate.latitude)-\(coordinate.longitude)"
+    }
+}
+
 protocol RouteCalculating {
     func calculate(
         request: MKDirections.Request,
@@ -127,6 +152,7 @@ final class AppViewModel {
     @ObservationIgnored private var pinnedKeepAliveTimer: Timer?
     @ObservationIgnored private var cancellables: Set<AnyCancellable> = []
     @ObservationIgnored private var pendingSavedLocationDraft: SavedLocationDraft?
+    @ObservationIgnored private var suppressNextOperationModeReset = false
     private(set) var lastSentPosition: CLLocationCoordinate2D?
     private(set) var lastSentAt: Date?
     var dependencyVersion: Int = 0
@@ -226,20 +252,57 @@ final class AppViewModel {
         return preview(for: candidate)
     }
 
-    var estimatedTime: String {
-        let distance: Double
-        if let route = selectedRoute {
-            distance = route.distance
-        } else if draftTotalRouteDistance > 0 {
-            distance = draftTotalRouteDistance
-        } else if totalRouteDistance > 0 {
-            distance = totalRouteDistance
-        } else {
-            return "--"
+    var travelTimeSummary: RouteTimeSummary? {
+        let speedMetersPerSecond = speed * (1000.0 / 3600.0)
+        guard speedMetersPerSecond > 0 else { return nil }
+
+        if let remainingDistance = activeRemainingRouteDistance {
+            return RouteTimeSummary(
+                label: "剩餘",
+                distance: remainingDistance,
+                timeText: Self.formatDuration(remainingDistance / speedMetersPerSecond)
+            )
         }
-        let timeSeconds = distance / (speed * (1000.0 / 3600.0))
-        if timeSeconds.isInfinite || timeSeconds.isNaN { return "--" }
-        return "\(Int(timeSeconds) / 60) 分 \(Int(timeSeconds) % 60) 秒"
+
+        if let draftDistance = draftEstimatedRouteDistance {
+            return RouteTimeSummary(
+                label: "單趟",
+                distance: draftDistance,
+                timeText: Self.formatDuration(draftDistance / speedMetersPerSecond)
+            )
+        }
+
+        return nil
+    }
+
+    var estimatedTime: String {
+        travelTimeSummary?.timeText ?? "--"
+    }
+
+    var draftRouteEndpointMarkers: [RouteEndpointMarker] {
+        guard operationMode == .multiPoint || operationMode == .fixedRoute else { return [] }
+        return endpointMarkers(
+            for: draftRoutePoints,
+            isClosedLoop: isClosedLoop,
+            startStyle: .draftStart,
+            endStyle: .draftEnd,
+            startEndStyle: .draftStartEnd,
+            labelPrefix: "草稿"
+        )
+    }
+
+    var activeRouteEndpointMarkers: [RouteEndpointMarker] {
+        guard activeOperationMode == .routeAB || activeOperationMode == .multiPoint || activeOperationMode == .fixedRoute else {
+            return []
+        }
+        return endpointMarkers(
+            for: currentRoutePoints,
+            isClosedLoop: activeIsClosedLoop,
+            startStyle: .activeStart,
+            endStyle: .activeEnd,
+            startEndStyle: .activeStartEnd,
+            labelPrefix: ""
+        )
     }
 
     var buttonTitle: String {
@@ -361,6 +424,53 @@ final class AppViewModel {
                 self?.dependencyVersion += 1
             }
             .store(in: &cancellables)
+    }
+
+    var draftEstimatedRouteDistance: CLLocationDistance? {
+        let distance: Double
+        if let route = selectedRoute {
+            distance = route.distance
+        } else if draftTotalRouteDistance > 0 {
+            distance = draftTotalRouteDistance
+        } else {
+            return nil
+        }
+        return distance > 0 ? distance : nil
+    }
+
+    var activeRemainingRouteDistance: CLLocationDistance? {
+        guard hasActiveRouteSnapshot,
+              activeOperationMode != .fixedPoint,
+              activeOperationMode != .joystick,
+              currentRoutePoints.count > 1,
+              totalRouteDistance > 0 else {
+            return nil
+        }
+
+        let currentDistance = clampedRouteDistance(traveledDistance)
+
+        if activeOperationMode == .multiPoint && activeIsClosedLoop {
+            let remaining = totalRouteDistance - currentDistance
+            return remaining <= 0 ? totalRouteDistance : remaining
+        }
+
+        if routeTravelDirection == .backward {
+            return currentDistance
+        }
+
+        return max(totalRouteDistance - currentDistance, 0)
+    }
+
+    func consumeProgrammaticModeResetSuppression() -> Bool {
+        let shouldSuppress = suppressNextOperationModeReset
+        suppressNextOperationModeReset = false
+        return shouldSuppress
+    }
+
+    func setOperationModeProgrammatically(_ mode: OperationMode) {
+        guard operationMode != mode else { return }
+        suppressNextOperationModeReset = true
+        operationMode = mode
     }
 
     // MARK: - Map interaction
@@ -708,41 +818,90 @@ final class AppViewModel {
 
         switch item.kind {
         case .point:
-            operationMode = .fixedPoint
-            pointB = nil
-            pointA = item.coordinates.first
-            tempCoordinate = nil
-            waypoints = []
-            selectedImportedGPXRouteID = nil
-            locationInputError = nil
-            appState = pointA == nil ? .selectingA : .readyToMove
-            clearDraftGeometry()
-        case .route, .loop:
-            operationMode = .fixedRoute
+            applySavedPoint(item)
+        case .route:
+            applySavedRoute(item, mode: targetOperationMode(for: item))
+        case .loop:
+            applySavedRoute(item, mode: .multiPoint)
+        }
+    }
+
+    private func applySavedPoint(_ item: SavedLocationItem) {
+        guard let coordinate = item.coordinates.first else {
+            savedLocationError = "這筆收藏的點位資料異常。"
+            return
+        }
+
+        setOperationModeProgrammatically(.fixedPoint)
+        resetDraftStateForSavedLocation()
+        pointA = coordinate
+        isClosedLoop = false
+        isEndlessLoop = false
+        appState = .readyToMove
+    }
+
+    private func applySavedRoute(_ item: SavedLocationItem, mode: OperationMode) {
+        let normalized = normalizeRoutePoints(item.coordinates)
+        guard normalized.count > 1 else {
+            savedLocationError = "這筆收藏的路線資料異常。"
+            return
+        }
+
+        setOperationModeProgrammatically(mode)
+        resetDraftStateForSavedLocation()
+
+        draftRoutePoints = normalized
+        draftCumulativeRouteDistances = RouteMotionEngine.cumulativeDistances(for: normalized)
+        draftTotalRouteDistance = item.totalDistance > 0 ? item.totalDistance : (draftCumulativeRouteDistances.last ?? 0)
+        var coords = normalized
+        customRoutePolyline = MKPolyline(coordinates: &coords, count: coords.count)
+
+        switch mode {
+        case .routeAB:
+            pointA = normalized.first
+            pointB = normalized.last
+            isClosedLoop = false
+        case .multiPoint, .fixedRoute:
             pointA = nil
             pointB = nil
-            tempCoordinate = nil
-            waypoints = []
-            routes = []
-            selectedRouteIndex = 0
-            selectedImportedGPXRouteID = nil
-            let normalized = normalizeRoutePoints(item.coordinates)
-            guard normalized.count > 1 else {
-                savedLocationError = "這筆收藏的路線資料異常。"
-                return
-            }
-            draftRoutePoints = normalized
-            draftCumulativeRouteDistances = RouteMotionEngine.cumulativeDistances(for: normalized)
-            draftTotalRouteDistance = item.totalDistance > 0 ? item.totalDistance : (draftCumulativeRouteDistances.last ?? 0)
-            var coords = normalized
-            customRoutePolyline = MKPolyline(coordinates: &coords, count: coords.count)
             isClosedLoop = item.kind == .loop
-            if isClosedLoop {
-                isEndlessLoop = false
-            }
-            locationInputError = nil
-            appState = .readyToMove
+        case .fixedPoint, .joystick:
+            pointA = nil
+            pointB = nil
+            isClosedLoop = false
         }
+
+        isEndlessLoop = false
+        appState = .readyToMove
+    }
+
+    private func targetOperationMode(for item: SavedLocationItem) -> OperationMode {
+        switch item.kind {
+        case .point:
+            return .fixedPoint
+        case .route:
+            if item.sourceMode == OperationMode.routeAB.rawValue {
+                return .routeAB
+            }
+            return .multiPoint
+        case .loop:
+            return .multiPoint
+        }
+    }
+
+    private func resetDraftStateForSavedLocation() {
+        pointA = nil
+        pointB = nil
+        tempCoordinate = nil
+        waypoints = []
+        routes = []
+        selectedRouteIndex = 0
+        selectedImportedGPXRouteID = nil
+        customRoutePolyline = nil
+        draftRoutePoints = []
+        draftCumulativeRouteDistances = []
+        draftTotalRouteDistance = 0
+        locationInputError = nil
     }
 
     private func currentSaveCandidate() -> SavableItemCandidate? {
@@ -1702,6 +1861,61 @@ final class AppViewModel {
         @unknown default:
             break
         }
+    }
+
+    private func endpointMarkers(
+        for coordinates: [CLLocationCoordinate2D],
+        isClosedLoop: Bool,
+        startStyle: RouteEndpointMarkerStyle,
+        endStyle: RouteEndpointMarkerStyle,
+        startEndStyle: RouteEndpointMarkerStyle,
+        labelPrefix: String
+    ) -> [RouteEndpointMarker] {
+        let normalized = normalizeRoutePoints(coordinates)
+        guard let start = normalized.first else { return [] }
+
+        let startTitle = labelPrefix.isEmpty ? "起點" : "\(labelPrefix)起點"
+        let endTitle = labelPrefix.isEmpty ? "終點" : "\(labelPrefix)終點"
+        let mergedTitle = labelPrefix.isEmpty ? "起點／終點" : "\(labelPrefix)起點／終點"
+
+        if isClosedLoop {
+            return [
+                RouteEndpointMarker(
+                    style: startEndStyle,
+                    title: mergedTitle,
+                    coordinate: start
+                )
+            ]
+        }
+
+        guard let end = normalized.last else {
+            return [
+                RouteEndpointMarker(
+                    style: startStyle,
+                    title: startTitle,
+                    coordinate: start
+                )
+            ]
+        }
+
+        return [
+            RouteEndpointMarker(style: startStyle, title: startTitle, coordinate: start),
+            RouteEndpointMarker(style: endStyle, title: endTitle, coordinate: end)
+        ]
+    }
+
+    private static func formatDuration(_ seconds: TimeInterval) -> String {
+        guard seconds.isFinite, !seconds.isNaN else { return "--" }
+
+        let totalSeconds = max(Int(seconds.rounded()), 0)
+        let hours = totalSeconds / 3600
+        let minutes = (totalSeconds % 3600) / 60
+        let remainingSeconds = totalSeconds % 60
+
+        if hours > 0 {
+            return "\(hours) 小時 \(minutes) 分"
+        }
+        return "\(minutes) 分 \(remainingSeconds) 秒"
     }
 
     // MARK: - Map helpers

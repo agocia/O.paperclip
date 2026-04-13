@@ -10,8 +10,8 @@ struct MovementSettingsSectionView: View {
             VStack(alignment: .leading, spacing: 5) {
                 HStack(spacing: 8) {
                     Text("當前速度: \(String(format: "%.1f", vm.speed)) km/h")
-                    if !vm.routes.isEmpty || vm.draftTotalRouteDistance > 0 || vm.totalRouteDistance > 0 {
-                        Text("單趟: \(vm.estimatedTime)")
+                    if let summary = vm.travelTimeSummary {
+                        Text("\(summary.label): \(summary.timeText)")
                             .foregroundColor(ModernTheme.info)
                     }
                 }

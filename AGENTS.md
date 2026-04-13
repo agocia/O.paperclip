@@ -6,47 +6,59 @@
 
 ## OVERVIEW
 
-macOS SwiftUI app that spoofs iOS device GPS location via `pymobiledevice3`. Connects to iPhone/iPad over USB or Wi-Fi tunnel, then injects simulated coordinates through DVT instruments or legacy `simulate-location` CLI. Supports A→B route following, fixed-point pinning, multi-waypoint routes, and KML-based "PurePoint" overlay import.
+macOS SwiftUI app that spoofs iOS device GPS location via `pymobiledevice3`. Connects to iPhone/iPad over USB or Wi-Fi tunnel, then injects simulated coordinates through DVT instruments or legacy `simulate-location` CLI. Supports A→B route following, fixed-point pinning, multi-waypoint routes, saved route replay with automatic mode switching, live remaining-time display, explicit start/end map markers, and KML-based "PurePoint" overlay import.
 
 ## STRUCTURE
 
 ```
 O.Paperclip/
-├── O_PaperclipApp.swift          # @main entry, SwiftData container (Item model unused)
-├── ContentView.swift             # 1507-line monolith: sidebar + map + all UI
-├── AppViewModel.swift            # 764 lines: route calc, simulation timer, state machine
-├── DeviceManager.swift           # 1418 lines: pymobiledevice3 orchestration, tunnel mgmt
-├── DVTLocationStream.swift       # Persistent Python subprocess for real-time GPS injection
-├── RouteMotionEngine.swift       # Pure functions: cumulative distances, interpolation, loop modes
-├── LocationSearchService.swift    # MKLocalSearch + MKLocalSearchCompleter wrapper
-├── AppState.swift                # 8-case enum: selectingA → moving state machine
-├── Types.swift                   # OperationMode enum + DeviceConnectionState with user-facing text
-├── AppDiagnostics.swift          # Crash signal handler, session lifecycle, unexpected termination detection
-├── PurePointOverlaySupport.swift # KML parser, import/persist, NetworkLink resolution
-├── ShuangbeiPurePointData.swift  # PurePoint/Category data models, Color(hex:) extension
-├── Item.swift                    # SwiftData @Model placeholder (unused)
+├── O_PaperclipApp.swift                       # @main entry, SwiftData container (Item model unused)
+├── ContentView.swift                          # Root split view + map composition
+├── AppViewModel.swift                         # Route calc, simulation timer, save/apply workflows
+├── Core/
+│   ├── Algorithms/RouteMotionEngine.swift     # Pure distance/interpolation helpers
+│   ├── Constants/AppConstants.swift
+│   ├── Models/AppState.swift
+│   └── Models/Types.swift
+├── Services/
+│   ├── Device/DeviceManager.swift             # pymobiledevice3 orchestration, tunnel + hot-plug monitor
+│   ├── Device/DVTLocationStream.swift         # Persistent Python subprocess for real-time GPS injection
+│   ├── Diagnostics/AppDiagnostics.swift
+│   ├── Location/LocationSearchService.swift
+│   ├── Location/MKMapItem+Compatibility.swift # Compatibility helpers for MapKit item accessors
+│   ├── PurePoint/PurePointOverlaySupport.swift
+│   ├── Routes/ImportedGPXRouteSupport.swift
+│   └── SavedLocations/SavedLocationSupport.swift
+├── UI/
+│   ├── Controls/MovementSettingsSectionView.swift
+│   ├── Sidebar/DeviceStatusSectionView.swift
+│   └── ...
 ├── Info.plist
 ├── O_Paperclip.entitlements
 bundled/
-└── pymobiledevice3              # Bundled CLI binary
+├── pymobiledevice3                          # Bundled CLI binary
+└── pymobiledevice3-bundle/                 # Fast bundle variant
 O.PaperclipTests/
-└── O_PaperclipTests.swift       # 2 tests: KML parsing + NetworkLink resolution
+└── O_PaperclipTests.swift                  # Parser, logging, GPX/save/apply, joystick, route timing tests
 ```
 
 ## WHERE TO LOOK
 
 | Task | Location | Notes |
 |------|----------|-------|
-| GPS injection pipeline | `DVTLocationStream.swift` | Inline Python script via `Process` stdin/stdout |
-| Device connection flow | `DeviceManager.connectDeviceInternal()` | Sequential: resolve CLI → list devices → start tunnel → verify RSD → detect mode |
-| Tunnel establishment | `DeviceManager.startTunnelAndResolveEndpoint()` | Tries TCP then QUIC; falls back to admin prompt via osascript |
+| GPS injection pipeline | `Services/Device/DVTLocationStream.swift` | Inline Python script via `Process` stdin/stdout |
+| Device connection flow | `Services/Device/DeviceManager.connectDeviceInternal()` | Sequential: resolve CLI → list devices → start tunnel → verify RSD → detect mode |
+| Tunnel establishment | `Services/Device/DeviceManager.startTunnelAndResolveEndpoint()` | Tries TCP then QUIC; falls back to admin prompt via osascript |
+| USB hot-plug detection | `Services/Device/DeviceManager.startConnectionHealthMonitor()` | 2s polling of `usbmux list`, 2 misses before disconnect |
 | Route simulation loop | `AppViewModel.startSimulation()` | 1.2s Timer on RunLoop.main, delegates to `RouteMotionEngine` |
 | Coordinate throttling | `AppViewModel.shouldSendCoordinateUpdate()` | ≥2m distance OR ≥3s elapsed |
-| State machine | `AppState.swift` + `AppViewModel.handleMainAction()` | selectA → confirmA → selectB → confirmB → calcRoute → routeSelection → ready → moving |
-| KML import | `PurePointOverlaySupport.swift` | Full XMLParser delegate, handles StyleMap color resolution, NetworkLink following |
-| Map rendering perf | `ContentView.renderState()` | Viewport filtering at 180 points, density bucketing cap at 220 |
-| Python path resolution | `DeviceManager.resolveCLI()` | Bundled binary → standalone CLI → Python module; checks 3.10+ |
-| Auto-reconnect | `DeviceManager.scheduleAutoReconnect()` | Exponential backoff capped at 8s |
+| Saved item apply flow | `AppViewModel.applySavedLocation()` | Programmatic mode switch with restore rules for point / route / loop |
+| Route timing + endpoint markers | `AppViewModel.travelTimeSummary` + `ContentView` map annotations | Draft shows one-way estimate, active route shows remaining time |
+| State machine | `Core/Models/AppState.swift` + `AppViewModel.handleMainAction()` | selectA → confirmA → selectB → confirmB → calcRoute → routeSelection → ready → moving |
+| KML import | `Services/PurePoint/PurePointOverlaySupport.swift` | Full XMLParser delegate, handles StyleMap color resolution, NetworkLink following |
+| Map rendering perf | `Services/PurePoint/PurePointRenderEngine.swift` | Viewport filtering at 180 points, density bucketing cap at 220 |
+| Python path resolution | `Services/Device/DeviceManager.resolveCLI()` | Bundled binary → standalone CLI → bundle fast path |
+| Auto-reconnect | `Services/Device/DeviceManager.scheduleAutoReconnect()` | Exponential backoff capped at 8s |
 
 ## CONVENTIONS
 
@@ -94,6 +106,6 @@ App resolves CLI in order: bundled binary → `~/.local/bin` → homebrew → sy
 
 - `Item.swift` SwiftData model and `sharedModelContainer` are Xcode template leftovers — not used by any feature.
 - `ContentView.init()` creates `DeviceManager` and `LocationSearchService` inline — no dependency injection container.
-- `MKMapItem` extensions (`item.location`, `item.address`, `item.addressRepresentations`) referenced in `AppViewModel` and `LocationSearchService` are not defined in the repo — likely from a newer MapKit SDK or missing extension file.
+- `Services/Location/MKMapItem+Compatibility.swift` provides the compatibility accessors used by `AppViewModel` and `LocationSearchService`.
 - `default.profraw` in root is a code coverage artifact — should be gitignored.
-- Test coverage is minimal: 2 tests covering only KML parsing. No tests for `DeviceManager`, `AppViewModel`, or `RouteMotionEngine`.
+- Automated tests now cover KML / GPX parsing, saved-item restore rules, joystick movement, route replacement, timing summaries, and several utility parsers. Hot-plug detection still relies on manual USB unplug/replug verification.
