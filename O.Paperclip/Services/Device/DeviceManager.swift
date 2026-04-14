@@ -55,6 +55,84 @@ private struct PreparedDeviceState {
     let simulateLocationMode: SimulateLocationMode
 }
 
+// USB 熱插拔監看改走 ioreg，避免長時間反覆叫 pymobiledevice3 usbmux list 造成逾時與卡死。
+enum USBHardwareProbeParser {
+    nonisolated static func identifiers(in raw: String) -> [String] {
+        struct DeviceBlock {
+            var serial: String?
+            var product: String?
+            var supportsIPhoneOS = false
+        }
+
+        var identifiers: [String] = []
+        var currentBlock: DeviceBlock?
+
+        func flushCurrentBlock() {
+            guard let currentBlock,
+                  let serial = currentBlock.serial?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !serial.isEmpty else {
+                return
+            }
+
+            let isMobileAppleDevice =
+                currentBlock.supportsIPhoneOS
+                || ["iphone", "ipad", "ipod"].contains(currentBlock.product?.lowercased() ?? "")
+
+            guard isMobileAppleDevice else { return }
+            identifiers.append(serial)
+        }
+
+        for line in raw.components(separatedBy: .newlines) {
+            if line.contains("<class IOUSBHostDevice"), line.contains("+-o ") {
+                flushCurrentBlock()
+                currentBlock = DeviceBlock(product: headerProductName(from: line))
+                continue
+            }
+
+            guard var block = currentBlock else { continue }
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+
+            if let serial = quotedValue(for: "kUSBSerialNumberString", in: trimmed) {
+                block.serial = serial
+            } else if let product = quotedValue(for: "USB Product Name", in: trimmed)
+                        ?? quotedValue(for: "kUSBProductString", in: trimmed) {
+                block.product = product
+            } else if trimmed.contains("\"SupportsIPhoneOS\" = Yes") {
+                block.supportsIPhoneOS = true
+            } else if trimmed == "}" {
+                currentBlock = block
+                flushCurrentBlock()
+                currentBlock = nil
+                continue
+            }
+
+            currentBlock = block
+        }
+
+        flushCurrentBlock()
+
+        var seen = Set<String>()
+        return identifiers.filter { seen.insert($0).inserted }
+    }
+
+    nonisolated private static func headerProductName(from line: String) -> String? {
+        guard let markerRange = line.range(of: "+-o ") else { return nil }
+        let suffix = line[markerRange.upperBound...]
+        guard let atIndex = suffix.firstIndex(of: "@") else { return nil }
+        let name = suffix[..<atIndex].trimmingCharacters(in: .whitespacesAndNewlines)
+        return name.isEmpty ? nil : name
+    }
+
+    nonisolated private static func quotedValue(for key: String, in line: String) -> String? {
+        let prefix = "\"\(key)\" = \""
+        guard let range = line.range(of: prefix) else { return nil }
+        let remainder = line[range.upperBound...]
+        guard let closingQuote = remainder.firstIndex(of: "\"") else { return nil }
+        let value = remainder[..<closingQuote].trimmingCharacters(in: .whitespacesAndNewlines)
+        return value.isEmpty ? nil : String(value)
+    }
+}
+
 private final class LockedStringBuffer: @unchecked Sendable {
     private let lock = NSLock()
     private var text = ""
@@ -513,6 +591,22 @@ enum RemoteBrowseOutputParser {
     }
 }
 
+enum DeviceIdentifierNormalizer {
+    nonisolated static func normalized(_ raw: String?) -> String? {
+        guard let raw else { return nil }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        return trimmed
+            .replacingOccurrences(of: "-", with: "")
+            .uppercased()
+    }
+
+    nonisolated static func matches(_ lhs: String?, _ rhs: String?) -> Bool {
+        guard let lhs = normalized(lhs), let rhs = normalized(rhs) else { return false }
+        return lhs == rhs
+    }
+}
+
 final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Sendable {
     @Published private(set) var connectionState: DeviceConnectionState = .disconnected
     @Published private(set) var deviceName: String = "未連接"
@@ -565,6 +659,8 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
     private var isConnectionInFlight = false
     private let sendQueueSpecificKey = DispatchSpecificKey<String>()
     private let sendQueueSpecificValue = "paperclip.gps.sender"
+    private let connectionQueueSpecificKey = DispatchSpecificKey<String>()
+    private let connectionQueueSpecificValue = "paperclip.connection"
     private var inFlight = false
     private var pendingCoordinate: CLLocationCoordinate2D?
     private let dvtStream = DVTLocationStream()
@@ -606,6 +702,7 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
 
     init() {
         sendQueue.setSpecific(key: sendQueueSpecificKey, value: sendQueueSpecificValue)
+        connectionQueue.setSpecific(key: connectionQueueSpecificKey, value: connectionQueueSpecificValue)
         let defaults = UserDefaults.standard
         manualRsdHost = defaults.string(forKey: Self.manualRsdHostKey) ?? ""
         manualRsdPort = defaults.string(forKey: Self.manualRsdPortKey) ?? ""
@@ -711,7 +808,7 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
 
                 self.setConnectionState(.connected, deviceName: "\(deviceLabel) (RSD: \(ep.host):\(ep.port))", lastError: nil)
                 self.setConnectionNotice(nil)
-                self.startConnectionHealthMonitor(using: cmd, deviceKey: connectedDeviceKey)
+                self.startConnectionHealthMonitor(deviceKey: connectedDeviceKey)
 #if DEBUG
                 print("✅ Tunnel OK: \(DeviceLogRedactor.maskedEndpoint(host: ep.host, port: ep.port))")
 #endif
@@ -995,7 +1092,8 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
     }
 
     private func matchesDevice(_ device: USBMuxDevice, requestedUDID: String) -> Bool {
-        device.identifier == requestedUDID || device.uniqueDeviceID == requestedUDID
+        DeviceIdentifierNormalizer.matches(device.identifier, requestedUDID)
+            || DeviceIdentifierNormalizer.matches(device.uniqueDeviceID, requestedUDID)
     }
 
     private func deviceDebugLabel(for device: USBMuxDevice) -> String {
@@ -1015,7 +1113,7 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
         let picked =
             devices.first(where: {
                 guard let preferred else { return false }
-                return $0.identifier == preferred || $0.uniqueDeviceID == preferred
+                return matchesDevice($0, requestedUDID: preferred)
             }) ??
             devices.first(where: { ($0.connectionType ?? "").uppercased() == "USB" }) ??
             devices.first
@@ -1053,7 +1151,7 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
         return deviceKey
     }
 
-    private func startConnectionHealthMonitor(using cmd: [String], deviceKey: String?) {
+    private func startConnectionHealthMonitor(deviceKey: String?) {
         stopConnectionHealthMonitor(clearTrackedDevice: false)
 
         guard effectiveTunnelConnectionType == .usb,
@@ -1072,11 +1170,11 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
             repeating: AppConstants.DeviceStream.healthCheckInterval
         )
         timer.setEventHandler { [weak self] in
-            self?.performConnectionHealthCheck(using: cmd, deviceKey: deviceKey)
+            self?.performConnectionHealthCheck(deviceKey: deviceKey)
         }
         connectionHealthTimer = timer
         timer.resume()
-        appendLog("已啟動 USB 熱插拔監看")
+        appendLog("已啟動 USB 熱插拔監看（IOKit）")
     }
 
     private func stopConnectionHealthMonitor(clearTrackedDevice: Bool) {
@@ -1089,7 +1187,7 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
         }
     }
 
-    private func performConnectionHealthCheck(using cmd: [String], deviceKey: String) {
+    private func performConnectionHealthCheck(deviceKey: String) {
         guard !userInitiatedDisconnect else { return }
         guard autoReconnectWorkItem == nil else { return }
         guard !isConnectionInFlight else { return }
@@ -1098,8 +1196,8 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
         guard effectiveTunnelConnectionType == .usb else { return }
 
         do {
-            let devices = try listConnectedDevicesForHealthMonitor(using: cmd)
-            let isStillConnected = devices.contains { matchesDevice($0, requestedUDID: deviceKey) }
+            let identifiers = try listConnectedDeviceKeysForHealthMonitor()
+            let isStillConnected = identifiers.contains { DeviceIdentifierNormalizer.matches($0, deviceKey) }
             if isStillConnected {
                 healthMonitorMissingCount = 0
                 return
@@ -1117,12 +1215,12 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
         }
     }
 
-    private func listConnectedDevicesForHealthMonitor(using cmd: [String]) throws -> [USBMuxDevice] {
+    private func listConnectedDeviceKeysForHealthMonitor() throws -> [String] {
         let raw = try runWithTimeout(
-            cmd + ["usbmux", "list"],
+            ["/usr/sbin/ioreg", "-p", "IOUSB", "-l", "-w0"],
             timeout: AppConstants.DeviceStream.healthCheckTimeout
         )
-        return decodeUSBMuxDevices(from: raw)
+        return USBHardwareProbeParser.identifiers(in: raw)
     }
 
     private func startTunnelWithAdminPrompt(using cmd: [String], udid: String?) throws {
@@ -1712,9 +1810,7 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
             guard let self else { return }
             out.fileHandleForReading.readabilityHandler = nil
             err.fileHandleForReading.readabilityHandler = nil
-            if self.rsdEndpoint != nil && !self.userInitiatedDisconnect {
-                self.handleUnexpectedConnectionLoss(reason: "tunnel 行程已結束（code: \(proc.terminationStatus)）")
-            }
+            self.handleUnexpectedConnectionLoss(reason: "tunnel 行程已結束（code: \(proc.terminationStatus)）")
         }
 
         tunnelProcess = p
@@ -1762,6 +1858,10 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
 
     private func isOnSendQueue() -> Bool {
         DispatchQueue.getSpecific(key: sendQueueSpecificKey) == sendQueueSpecificValue
+    }
+
+    private func isOnConnectionQueue() -> Bool {
+        DispatchQueue.getSpecific(key: connectionQueueSpecificKey) == connectionQueueSpecificValue
     }
 
     private func resetSendState() {
@@ -1815,7 +1915,13 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
     }
 
     private func handleUnexpectedConnectionLoss(reason: String) {
-        handleConfirmedConnectionLoss(reason: reason)
+        if isOnConnectionQueue() {
+            handleConfirmedConnectionLoss(reason: reason)
+            return
+        }
+        connectionQueue.async { [weak self] in
+            self?.handleConfirmedConnectionLoss(reason: reason)
+        }
     }
 
     private func handleConfirmedConnectionLoss(reason: String) {
@@ -2003,15 +2109,21 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
                 self?.appendLog("dvt-stream err: \(self?.summarizeOutput(text, maxChars: 180) ?? text)")
             },
             onExit: { [weak self] status in
-                guard let self else { return }
-                self.appendLog("dvt-stream exited: \(status)")
-                if self.expectedDvtStreamExit {
-                    self.expectedDvtStreamExit = false
-                    return
-                }
-                self.handleUnexpectedConnectionLoss(reason: "定位串流已中斷（code: \(status)）")
+                self?.handleDvtStreamExit(status)
             }
         )
+    }
+
+    private func handleDvtStreamExit(_ status: Int32) {
+        sendQueue.async { [weak self] in
+            guard let self else { return }
+            self.appendLog("dvt-stream exited: \(status)")
+            if self.expectedDvtStreamExit {
+                self.expectedDvtStreamExit = false
+                return
+            }
+            self.handleUnexpectedConnectionLoss(reason: "定位串流已中斷（code: \(status)）")
+        }
     }
 
     private func run(_ args: [String]) throws -> String {

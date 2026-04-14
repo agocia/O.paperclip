@@ -119,6 +119,44 @@ struct O_PaperclipTests {
         #expect(identifiers == ["DUPLICATED-DEVICE"])
     }
 
+    @Test func parsesIOSUSBIdentifiersFromIORegOutput() throws {
+        let raw = """
+        +-o USB2 Hub@02100000  <class IOUSBHostDevice, id 0x100000a36, registered>
+          {
+            "kUSBSerialNumberString" = "7423J07"
+            "USB Product Name" = "USB2 Hub"
+          }
+        +-o iPhone@03100000  <class IOUSBHostDevice, id 0x10019324e, registered>
+          {
+            "kUSBSerialNumberString" = "00008150001220E23C84401C"
+            "USB Product Name" = "iPhone"
+            "SupportsIPhoneOS" = Yes
+          }
+        +-o iPad@04100000  <class IOUSBHostDevice, id 0x10019324f, registered>
+          {
+            "kUSBSerialNumberString" = "000081010000112233445566"
+            "kUSBProductString" = "iPad"
+            "SupportsIPhoneOS" = Yes
+          }
+        """
+
+        let identifiers = USBHardwareProbeParser.identifiers(in: raw)
+
+        #expect(identifiers == [
+            "00008150001220E23C84401C",
+            "000081010000112233445566"
+        ])
+    }
+
+    @Test func matchesDashedAndUndashedDeviceIdentifiers() {
+        #expect(
+            DeviceIdentifierNormalizer.matches(
+                "00008150-001220E23C84401C",
+                "00008150001220E23C84401C"
+            )
+        )
+    }
+
     @Test func parsesDirectKMLIntoOverlay() throws {
         let data = """
         <?xml version="1.0" encoding="UTF-8"?>
@@ -187,12 +225,12 @@ struct O_PaperclipTests {
         }
 
         guard let caughtError else {
-            #expect(false)
+            Issue.record("預期應攔截到不支援的遠端連結錯誤，但實際上沒有拋錯")
             return
         }
 
         guard case .unsupportedRemoteScheme(let href) = caughtError else {
-            #expect(false)
+            Issue.record("預期為 unsupportedRemoteScheme，實際為 \(String(describing: caughtError))")
             return
         }
         #expect(href.contains("file://"))
@@ -221,12 +259,12 @@ struct O_PaperclipTests {
         }
 
         guard let caughtError else {
-            #expect(false)
+            Issue.record("預期應要求遠端連結審核，但實際上沒有拋錯")
             return
         }
 
         guard case .remoteLinkRequiresApproval(let urls) = caughtError else {
-            #expect(false)
+            Issue.record("預期為 remoteLinkRequiresApproval，實際為 \(String(describing: caughtError))")
             return
         }
         #expect(urls == [remoteURL])
@@ -303,12 +341,12 @@ struct O_PaperclipTests {
         }
 
         guard let caughtError else {
-            #expect(false)
+            Issue.record("預期相對 HTTPS 連結需要審核，但實際上沒有拋錯")
             return
         }
 
         guard case .remoteLinkRequiresApproval(let urls) = caughtError else {
-            #expect(false)
+            Issue.record("預期為 remoteLinkRequiresApproval，實際為 \(String(describing: caughtError))")
             return
         }
         #expect(urls == [expectedURL])
@@ -363,12 +401,12 @@ struct O_PaperclipTests {
         }
 
         guard let caughtError else {
-            #expect(false)
+            Issue.record("預期批次預覽會要求遠端審核，但實際上沒有拋錯")
             return
         }
 
         guard case .remoteLinkRequiresApproval(let urls) = caughtError else {
-            #expect(false)
+            Issue.record("預期為 remoteLinkRequiresApproval，實際為 \(String(describing: caughtError))")
             return
         }
         #expect(urls == [remoteURL])

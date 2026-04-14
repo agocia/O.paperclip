@@ -59,7 +59,10 @@ struct MKDirectionsRouteCalculator: RouteCalculating {
         request: MKDirections.Request,
         completion: @escaping (MKDirections.Response?, (any Error)?) -> Void
     ) {
-        MKDirections(request: request).calculate(completionHandler: completion)
+        let completionBox = UnsafeSendableBox(completion)
+        MKDirections(request: request).calculate { response, error in
+            completionBox.value(response, error)
+        }
     }
 }
 

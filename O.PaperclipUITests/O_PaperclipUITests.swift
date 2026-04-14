@@ -5,6 +5,7 @@
 //  Created by Mason Yen on 3/2/26.
 //
 
+import AppIntents
 import XCTest
 
 final class O_PaperclipUITests: XCTestCase {

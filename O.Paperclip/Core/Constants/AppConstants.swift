@@ -42,7 +42,7 @@ enum AppConstants {
         static let ackLogInterval = 50
         static let reconnectBackoffCap: TimeInterval = 8.0
         static let healthCheckInterval: TimeInterval = 2.0
-        static let healthCheckTimeout: TimeInterval = 6.0
+        static let healthCheckTimeout: TimeInterval = 3.0
         static let healthCheckMissingThreshold = 2
     }
     enum Search {
