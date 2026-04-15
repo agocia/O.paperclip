@@ -1,68 +1,71 @@
 # O.Paperclip
 
-**macOS iPhone / iPad 虛擬定位工具**，可透過 USB 或 Wi-Fi 對實體 iOS 裝置送出模擬座標，支援定點、A-B 路線、多點路線、固定路線匯入、搖桿控制，以及 KML 圖層輔助。
+**A macOS GPS spoofing tool for iPhone and iPad**, built for real devices over USB or Wi-Fi. It supports pinning a fixed location, A-B routing, multi-point routes, imported fixed routes, joystick control, and KML-based PurePoint overlays.
+
+**Before using this app: your iPhone / iPad must have Developer Mode enabled.**  
+**If this project helps you, you can support its development here: Ko-fi: https://ko-fi.com/agocia**
 
 <p align="right">
-  <a href="README.md"><img alt="繁體中文" src="https://img.shields.io/badge/繁體中文-active-2d3748?style=flat-square"></a>
-  <a href="README.en.md"><img alt="English" src="https://img.shields.io/badge/English-gray?style=flat-square"></a>
+  <a href="README.CH.md"><img alt="Traditional Chinese" src="https://img.shields.io/badge/繁體中文-gray?style=flat-square"></a>
+  <a href="README.md"><img alt="English" src="https://img.shields.io/badge/English-active-2d3748?style=flat-square"></a>
 </p>
 
-> ### 專案性質聲明
+> ### Project Status
 >
-> O.Paperclip 為個人維護的開源專案，不是商業產品，也沒有專職團隊。本專案會持續跟著 macOS、iOS 與 `pymobiledevice3` 的變化調整，但仍請將它視為「持續演進中的實用工具」，而不是對所有環境都保證一致行為的封閉式產品。
+> O.Paperclip is an independently maintained open-source project, not a commercial product. It is actively improved, but it should still be treated as a practical tool that evolves with macOS, iOS, and `pymobiledevice3`, not as a guaranteed appliance for every environment.
 >
-> - 本專案主要針對 macOS 上的 iPhone / iPad 虛擬定位需求設計。
-> - 連線穩定度會受到 iOS 版本、USB / Wi-Fi 環境、Developer Mode 與裝置信任狀態影響。
-> - 若遇到問題，建議附上版本、裝置型號、連線方式與錯誤訊息回報 issue。
-> - 本專案不承諾永久維護，也不對使用本工具所造成的任何損失負責。
+> - The app is designed specifically for macOS-based iPhone / iPad GPS simulation.
+> - Stability depends on iOS version, Developer Mode, trust pairing, and your USB / Wi-Fi environment.
+> - If you hit a bug, please include your device model, iOS version, connection method, and visible error message when reporting it.
+> - The project is provided as-is, without guaranteed long-term maintenance.
 
-## 功能亮點
+## Highlights
 
-### 模擬模式
+### Simulation Modes
 
-| 模式 | 說明 |
+| Mode | Description |
 | --- | --- |
-| **定點** | 把裝置位置固定在單一座標 |
-| **A-B** | 選擇起點與終點，自動規劃路線後移動 |
-| **多點** | 依序經過多個自訂路徑點 |
-| **搖桿** | 以方向鍵或 WASD 即時推動目前位置 |
-| **固定路線匯入** | 從右側「匯入與收藏」套用已匯入的 GPX 固定路線 |
+| **Pin** | Keep the device fixed at a single coordinate |
+| **A-B** | Pick a start and end point, calculate a route, and move along it |
+| **Multi-Point** | Move through multiple custom route points in order |
+| **Joystick** | Push the current position live with arrow keys or WASD |
+| **Imported Fixed Route** | Apply a GPX route from the right-side import panel |
 
-### 路線與地圖輔助
+### Route and Map Features
 
-- 草稿黃線與活動藍線都會明確標出起點 / 終點。
-- 閉圈路線會以單一「起點／終點」標記顯示，避免重疊。
-- 尚未開始時顯示單趟預估時間；開始後即時顯示剩餘時間。
-- 支援收藏點位、A-B 路線、多點路線與閉圈路線。
-- 套用收藏時會自動切到相容模式，不需要手動切換。
-- 支援匯入 GPX 固定路線與 KML PurePoint 圖層。
+- Draft routes and active routes both show clear start / end markers.
+- Closed loops collapse into a single `Start / End` marker to avoid overlap.
+- Drafts show one-way ETA before movement starts.
+- Active routes show live remaining time during movement.
+- Saved points and routes automatically switch the app to a compatible mode when applied.
+- GPX imported routes and KML PurePoint overlays are supported.
 
-### 連線體驗
+### Connection Behavior
 
-- 支援 **USB** 與 **Wi-Fi tunnel** 兩種連線方式。
-- USB 拔除會主動偵測掉線，立即停止模擬並自動重連。
-- 既有 tunnel 中斷或送點失敗時也會走自動重連流程。
-- 可在已連線狀態下直接切換 USB / Wi-Fi。
+- Supports both **USB** and **Wi-Fi tunnel** connections.
+- USB hot-unplug is detected proactively, the simulation is stopped immediately, and auto-reconnect starts automatically.
+- Tunnel failures and send failures continue to use the existing reconnect flow.
+- You can switch between USB and Wi-Fi while the app is running.
 
-## 系統需求
+## Requirements
 
-| 項目 | 需求 |
+| Item | Requirement |
 | --- | --- |
-| macOS | macOS 14 Sonoma 以上 |
-| iPhone / iPad | iOS 16 以上 |
-| 裝置設定 | 需開啟 Developer Mode，且已信任此 Mac |
-| 連線方式 | USB 或與 Mac 同網段的 Wi-Fi |
-| 其他 | 無需自行安裝 Python、Homebrew 或 `pymobiledevice3` |
+| macOS | macOS 14 Sonoma or later |
+| iPhone / iPad | iOS 16 or later |
+| Device setup | Developer Mode enabled and trusted with this Mac |
+| Connection | USB or Wi-Fi on the same network |
+| Other | No separate Python, Homebrew, or `pymobiledevice3` install required |
 
-## 安裝
+## Installation
 
-### 下載安裝
+### Download
 
-1. 前往 [Releases](../../releases) 下載最新版本。
-2. 開啟 `.dmg` 後，將 `O.Paperclip.app` 拖到 `Applications`。
-3. 第一次啟動時若被 Gatekeeper 擋下，請在 Finder 中右鍵 App，選擇「開啟」。
+1. Go to [Releases](../../releases) and download the latest build.
+2. Open the `.dmg` and drag `O.Paperclip.app` into `Applications`.
+3. If Gatekeeper blocks first launch, right-click the app in Finder and choose `Open`.
 
-### 從原始碼建置
+### Build From Source
 
 ```bash
 git clone https://github.com/agocia/O.paperclip.git
@@ -70,152 +73,152 @@ cd O.paperclip
 xcodebuild -project O.Paperclip.xcodeproj -scheme O.Paperclip -configuration Release build
 ```
 
-## 使用前準備
+## Before You Start
 
-### 1. 開啟 iPhone / iPad 的 Developer Mode
+### 1. Enable Developer Mode on the iPhone / iPad
 
-`設定` → `隱私權與安全性` → `開發者模式` → 開啟後重新開機。
+Go to `Settings` → `Privacy & Security` → `Developer Mode`, then restart the device.
 
-### 2. 先完成一次 USB 信任配對
+### 2. Complete one USB trust pairing first
 
-首次透過 USB 連線時，iPhone / iPad 會詢問是否信任這台 Mac。請點選「信任」並輸入裝置密碼。
+When you connect by USB for the first time, iPhone / iPad must trust this Mac.
 
-### 3. 若要使用 Wi-Fi，先用 USB 連成功一次
+### 3. Use USB once before Wi-Fi
 
-Wi-Fi tunnel 依賴先前的信任配對，因此第一次仍需先走 USB。
+Wi-Fi tunnel depends on the existing trust pairing, so first-time setup still starts with USB.
 
-## 快速開始
+## Quick Start
 
-### 1. 連線裝置
+### 1. Connect the Device
 
-**USB：**
+**USB**
 
-1. 插上 iPhone / iPad。
-2. 開啟 O.Paperclip。
-3. 確認側欄「連線模式」為 `USB`。
-4. 點選「開始連線」。
-5. 若跳出管理員密碼提示，輸入 macOS 管理員密碼以建立 tunnel。
+1. Connect the iPhone / iPad with a cable.
+2. Open O.Paperclip.
+3. Make sure the connection mode is set to `USB`.
+4. Click `Start Connection`.
+5. Enter the macOS administrator password if prompted.
 
-**Wi-Fi：**
+**Wi-Fi**
 
-1. 確認裝置與 Mac 在同一個網路。
-2. 將連線模式切到 `Wi-Fi`。
-3. 點選「開始連線」。
+1. Make sure the device and Mac are on the same network.
+2. Switch the connection mode to `Wi-Fi`.
+3. Click `Start Connection`.
 
-連線成功後，側欄會顯示裝置名稱與狀態。若 USB 被拔除或 tunnel 中斷，App 會主動偵測掉線、停止模擬、顯示提示，並自動嘗試重連。
+After a successful connection, the sidebar shows the device name and connection state. If USB is unplugged or the tunnel drops, the app detects the disconnect, stops simulation, shows a warning, and starts auto-reconnect.
 
-### 2. 選擇操作模式
+### 2. Choose a Mode
 
-模式選擇器目前提供四種模式：
+The mode picker currently shows four modes:
 
 - `A-B`
-- `定點`
-- `多點`
-- `搖桿`
+- `Pin`
+- `Multi-Point`
+- `Joystick`
 
-`固定路線` 已不再出現在模式選擇器中；請從右側「匯入與收藏」欄位匯入或套用。
+`Fixed Route` no longer appears in the mode picker. Use the right-side `Import & Saved` panel instead.
 
-### 3. 設定位置與開始模擬
+### 3. Set a Location and Start
 
-**A-B：**
+**A-B**
 
-1. 在地圖上設定起點 A。
-2. 確認 A 點。
-3. 在地圖上設定終點 B。
-4. 確認 B 點並選擇路線。
-5. 點「開始移動」。
+1. Pick point A on the map.
+2. Confirm point A.
+3. Pick point B.
+4. Confirm point B and choose a route.
+5. Click `Start Moving`.
 
-**定點：**
+**Pin**
 
-1. 在地圖上選定位置。
-2. 點「釘選此位置」。
+1. Pick a location on the map.
+2. Click `Pin This Location`.
 
-**多點：**
+**Multi-Point**
 
-1. 依序在地圖上新增多個點位。
-2. 點「開始移動」。
+1. Add multiple route points in order.
+2. Click `Start Moving`.
 
-**搖桿：**
+**Joystick**
 
-1. 啟用後以方向鍵或 `WASD` 推動位置。
-2. 可持續調整方向，不必重新選點。
+1. Start joystick control.
+2. Move with arrow keys or `WASD`.
 
-### 4. 停止或清除
+### 4. Stop or Clear
 
-- `停止`：停止目前模擬。
-- `清除路線` / `清除定位點`：清掉草稿或目前定位內容。
+- `Stop`: stop the current simulation.
+- `Clear Route` / `Clear Location`: clear the current draft or pinned state.
 
-## 匯入與收藏
+## Import and Saved Items
 
-右側「匯入與收藏」欄位可處理以下內容：
+The right-side `Import & Saved` panel handles:
 
-- 收藏目前點位
-- 收藏 A-B 路線
-- 收藏多點路線
-- 收藏閉圈路線
-- 匯入 GPX 固定路線
-- 匯入 KML PurePoint 圖層
+- Saved points
+- Saved A-B routes
+- Saved multi-point routes
+- Saved loop routes
+- Imported GPX fixed routes
+- Imported KML PurePoint overlays
 
-### 收藏套用規則
+### Saved Item Mapping
 
-套用收藏時會自動切到正確模式：
+When you click `Apply`, the app switches automatically:
 
-- 收藏點位 → `定點`
-- 收藏 A-B 路線 → `A-B`
-- 收藏多點路線 → `多點`
-- 收藏固定路線來源 → `多點`
-- 收藏閉圈 → `多點`，並自動開啟閉圈
+- Saved point → `Pin`
+- Saved A-B route → `A-B`
+- Saved multi-point route → `Multi-Point`
+- Saved fixed-route source → `Multi-Point`
+- Saved loop → `Multi-Point` with closed-loop enabled
 
-## PurePoint 圖層
+## PurePoint Overlay
 
-KML PurePoint 圖層可用來在地圖上顯示自訂分類標記：
+PurePoint overlays let you display custom KML-based points on the map:
 
-1. 點選「匯入 KML」。
-2. 選擇 `.kml` 檔。
-3. 匯入後可依分類篩選顯示。
+1. Click `Import KML`.
+2. Select a `.kml` file.
+3. Filter imported categories on the map as needed.
 
-## 常見問題
+## Troubleshooting
 
-### 點「開始連線」後一直轉圈
+### The app keeps spinning after I click Start Connection
 
-請先確認：
+Check the following:
 
-- iPhone / iPad 已解鎖
-- 已信任這台 Mac
-- Developer Mode 已開啟
-- 若使用 Wi-Fi，兩端位於同一個網段
+- The device is unlocked
+- This Mac is trusted
+- Developer Mode is enabled
+- For Wi-Fi, both devices are on the same subnet
 
-### 為什麼會跳管理員密碼
+### Why does the app ask for my administrator password?
 
-建立 tunnel 需要暫時的系統權限，這是正常行為。
+Tunnel setup needs temporary elevated privileges. This is expected.
 
-### USB 拔掉後為什麼會停止移動
+### Why does movement stop when I unplug the cable?
 
-這是預期行為。App 會主動檢查 USB 裝置是否仍在線上；一旦確認掉線，就會停止模擬、顯示「已偵測裝置掉線，模擬已停止，正在嘗試重新連線。」並開始自動重連。
+This is expected. The app actively checks whether the USB device is still present. Once it confirms the disconnect, it stops simulation, shows `Device disconnected, simulation stopped, reconnecting...`, and starts auto-reconnect.
 
-### 已經用 USB 連上了，可以直接切 Wi-Fi 嗎
+### Can I switch to Wi-Fi after connecting over USB?
 
-可以。切換為 `Wi-Fi` 後，App 會先中斷目前 USB 連線，再重建 Wi-Fi tunnel。
+Yes. Switching to `Wi-Fi` disconnects the active USB session and rebuilds the connection over Wi-Fi.
 
-### 停止後 GPS 沒恢復正常
+### GPS did not return to normal after stopping
 
-請再執行一次清除定位，或重新啟動 iPhone 的定位服務。
+Try clearing the location again, or restart location services on the device.
 
-## 開發與測試
+## Development
 
-### 本機建置
+### Build
 
 ```bash
 xcodebuild -project O.Paperclip.xcodeproj -scheme O.Paperclip -configuration Debug build
 ```
 
-### 測試
+### Test
 
 ```bash
 xcodebuild -project O.Paperclip.xcodeproj -scheme O.Paperclip test
 ```
 
-## 專案結構
+## Project Structure
 
 ```text
 O.Paperclip/
@@ -229,10 +232,10 @@ O.Paperclip/
 └── O.Paperclip.xcodeproj
 ```
 
-## 免責聲明
+## Disclaimer
 
-本工具僅供開發測試、隱私保護與其他合法用途。請勿將其用於作弊、詐欺或任何違反平台條款與法律的行為。使用本工具所產生的風險與責任，均由使用者自行承擔。
+This tool is intended for development testing, privacy protection, and other legitimate use cases. Do not use it for cheating, fraud, or any activity that violates platform terms or local laws. You are solely responsible for how you use it.
 
 ## License
 
-MIT License，詳見 [LICENSE](LICENSE)。
+MIT License. See [LICENSE](LICENSE).
