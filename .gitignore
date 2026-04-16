@@ -19,9 +19,11 @@ xcuserdata/
 
 # Distribution
 *.dmg
+*.dmg.sha256
 
 # AI / tooling
 .claude/
+**/.claude/
 .sisyphus/
 
 # Python

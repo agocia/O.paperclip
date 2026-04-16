@@ -204,6 +204,14 @@ KML PurePoint 圖層可用來在地圖上顯示自訂分類標記：
 
 請再執行一次清除定位，或重新啟動 iPhone 的定位服務。
 
+## 診斷與維護
+
+- Runtime logs 現在統一寫入 `~/Library/Application Support/fregata-O-PaperclipPackaging/Logs/`。
+- 長時間運行會套用有上限的 log rotation，涵蓋 lifecycle、incident、model bootstrap 與 privileged tunnel log。
+- 舊版遺留的 `O.Paperclip`、`O-Paperclip` Application Support 根目錄會在啟動時做一次性遷移，只清掉可再生的 log / tunnel artifact，保留使用者資料。
+- DMG 建置產物改為輸出到 `build/dmg/artifacts/`，不再落在 repo root。
+- 詳細維護流程請參考 [docs/maintenance.md](docs/maintenance.md)。
+
 ## 開發與測試
 
 ### 本機建置
@@ -217,6 +225,11 @@ xcodebuild -project O.Paperclip.xcodeproj -scheme O.Paperclip -configuration Deb
 ```bash
 xcodebuild -project O.Paperclip.xcodeproj -scheme O.Paperclip test
 ```
+
+Shared scheme 補充：
+
+- 共享的 `O.Paperclip` scheme 只會執行 `O.PaperclipTests`。Xcode 樣板產生的 UI 測試不再放在共享 test action 內。
+- XCTest 啟動 host app 時，O.Paperclip 會改走最小化 placeholder scene 與 in-memory model container，避免邏輯測試依賴完整地圖 UI 的啟動流程。
 
 ## 專案結構
 

@@ -6,18 +6,19 @@ ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 BUILD_ROOT="${ROOT_DIR}/build/dmg"
 DERIVED_DATA_DIR="${BUILD_ROOT}/DerivedData"
 STAGING_DIR="${BUILD_ROOT}/staging"
+ARTIFACTS_DIR="${BUILD_ROOT}/artifacts"
 APP_NAME="O.Paperclip"
 PROJECT_PATH="${ROOT_DIR}/${APP_NAME}.xcodeproj"
 APP_PATH="${DERIVED_DATA_DIR}/Build/Products/Release/${APP_NAME}.app"
 CLEAN_APP_PATH="${BUILD_ROOT}/${APP_NAME}-clean.app"
-DMG_PATH="${ROOT_DIR}/${APP_NAME}.dmg"
-SHA_PATH="${ROOT_DIR}/${APP_NAME}.dmg.sha256"
+DMG_PATH="${ARTIFACTS_DIR}/${APP_NAME}.dmg"
+SHA_PATH="${ARTIFACTS_DIR}/${APP_NAME}.dmg.sha256"
 TEMP_DMG_PATH="${BUILD_ROOT}/${APP_NAME}-temp.dmg"
 VOLUME_NAME="${APP_NAME}"
 
 echo "[INFO] Building ${APP_NAME} (Release)..."
 rm -rf "${BUILD_ROOT}"
-mkdir -p "${STAGING_DIR}"
+mkdir -p "${STAGING_DIR}" "${ARTIFACTS_DIR}"
 
 echo "[INFO] Sanitizing source inputs..."
 find "${ROOT_DIR}/O.Paperclip" -name '.DS_Store' -delete
@@ -46,8 +47,6 @@ rm -rf "${CLEAN_APP_PATH}"
 ditto --noextattr --norsrc "${APP_PATH}" "${CLEAN_APP_PATH}"
 find "${CLEAN_APP_PATH}" -name '.DS_Store' -delete
 xattr -cr "${CLEAN_APP_PATH}" 2>/dev/null || true
-rm -rf "${CLEAN_APP_PATH}/Contents/Resources/.claude"
-rm -f "${CLEAN_APP_PATH}/Contents/Resources/settings.local.json"
 
 echo "[INFO] Applying ad hoc signature to app..."
 codesign --force --deep --sign - --timestamp=none "${CLEAN_APP_PATH}"

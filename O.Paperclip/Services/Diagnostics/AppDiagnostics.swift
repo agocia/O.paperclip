@@ -54,10 +54,15 @@ enum DiagnosticsPaths {
 
 private enum CrashSignalMonitor {
     nonisolated(unsafe) private static var signalLogFD: Int32 = -1
+    private static let signalLogStore = RotatingRuntimeLogStore(
+        logURL: DiagnosticsPaths.signalLogURL,
+        maxBytes: DiagnosticsLogLimits.compactMaxBytes
+    )
 
     static func installIfNeeded() {
         guard signalLogFD == -1 else { return }
 
+        signalLogStore.prepareForAppend(resetIfOversized: true)
         let path = DiagnosticsPaths.signalLogURL.path
         signalLogFD = open(path, O_WRONLY | O_CREAT | O_APPEND, S_IRUSR | S_IWUSR)
         guard signalLogFD != -1 else { return }
@@ -87,6 +92,11 @@ private enum CrashSignalMonitor {
     }
 }
 
+private let uncaughtExceptionLogStore = RotatingRuntimeLogStore(
+    logURL: DiagnosticsPaths.logFileURL(named: "uncaught-exceptions.log"),
+    maxBytes: DiagnosticsLogLimits.compactMaxBytes
+)
+
 @MainActor
 final class AppDiagnostics: ObservableObject, DiagnosticsProviding {
     static let shared = AppDiagnostics()
@@ -102,6 +112,8 @@ final class AppDiagnostics: ObservableObject, DiagnosticsProviding {
     )
     private var didSetup = false
     private var terminationObserver: NSObjectProtocol?
+    private let lifecycleLogStore = RotatingRuntimeLogStore(logURL: DiagnosticsPaths.lifecycleLogURL)
+    private let incidentsLogStore = RotatingRuntimeLogStore(logURL: DiagnosticsPaths.incidentsURL)
 
     private init() {}
 
@@ -109,6 +121,10 @@ final class AppDiagnostics: ObservableObject, DiagnosticsProviding {
         guard !didSetup else { return }
         didSetup = true
 
+        LegacyAppSupportMigrator.migrateIfNeeded()
+        lifecycleLogStore.prepareForAppend(resetIfOversized: true)
+        incidentsLogStore.prepareForAppend(resetIfOversized: true)
+        uncaughtExceptionLogStore.prepareForAppend(resetIfOversized: true)
         CrashSignalMonitor.installIfNeeded()
         installExceptionHandler()
         detectPreviousUnexpectedTermination()
@@ -157,7 +173,7 @@ final class AppDiagnostics: ObservableObject, DiagnosticsProviding {
             reason: "偵測到上一個 session 沒有正常結束，可能是閒置時 crash 或被系統強制終止。"
         )
         lastUnexpectedTermination = record
-        appendJSONLine(record, to: DiagnosticsPaths.incidentsURL)
+        appendJSONLine(record, using: incidentsLogStore)
     }
 
     private func persistActiveSession() {
@@ -179,54 +195,25 @@ final class AppDiagnostics: ObservableObject, DiagnosticsProviding {
         else {
             return
         }
-        appendLine(line, to: DiagnosticsPaths.lifecycleLogURL)
+        appendLine(line, using: lifecycleLogStore)
     }
 
-    private func appendJSONLine<T: Encodable>(_ value: T, to url: URL) {
+    private func appendJSONLine<T: Encodable>(_ value: T, using store: RotatingRuntimeLogStore) {
         guard let data = try? JSONEncoder().encode(value),
               let line = String(data: data, encoding: .utf8) else {
             return
         }
-        appendLine(line, to: url)
+        appendLine(line, using: store)
     }
 
-    private func appendLine(_ line: String, to url: URL) {
-        let text = line + "\n"
-        let fm = FileManager.default
-        if !fm.fileExists(atPath: url.path) {
-            guard let data = text.data(using: .utf8) else { return }
-            try? data.write(to: url, options: .atomic)
-            return
-        }
-
-        guard let data = text.data(using: .utf8),
-              let handle = try? FileHandle(forWritingTo: url) else {
-            return
-        }
-
-        do {
-            try handle.seekToEnd()
-            try handle.write(contentsOf: data)
-            try handle.close()
-        } catch {
-            try? handle.close()
-        }
+    private func appendLine(_ line: String, using store: RotatingRuntimeLogStore) {
+        store.appendLine(line)
     }
 
     private func installExceptionHandler() {
         NSSetUncaughtExceptionHandler { exception in
             let line = "[\(ISO8601DateFormatter().string(from: Date()))] \(exception.name.rawValue): \(exception.reason ?? "unknown")\n"
-            if let data = line.data(using: .utf8) {
-                let url = DiagnosticsPaths.logFileURL(named: "uncaught-exceptions.log")
-                if FileManager.default.fileExists(atPath: url.path),
-                   let handle = try? FileHandle(forWritingTo: url) {
-                    _ = try? handle.seekToEnd()
-                    try? handle.write(contentsOf: data)
-                    try? handle.close()
-                } else {
-                    try? data.write(to: url, options: .atomic)
-                }
-            }
+            uncaughtExceptionLogStore.appendLine(line.trimmingCharacters(in: .newlines))
         }
     }
 }

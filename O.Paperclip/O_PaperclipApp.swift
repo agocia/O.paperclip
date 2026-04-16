@@ -10,10 +10,22 @@ import Foundation
 import SwiftUI
 import SwiftData
 
-private enum ModelContainerBootstrap {
-    private static let logURL = DiagnosticsPaths.logFileURL(named: "model-container.log")
+private enum AppRuntimeEnvironment {
+    static let isRunningTests =
+        ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+}
 
-    static func makeSharedContainer() -> ModelContainer {
+private enum ModelContainerBootstrap {
+    private static let logStore: RotatingRuntimeLogStore = {
+        let store = RotatingRuntimeLogStore(
+            logURL: DiagnosticsPaths.logFileURL(named: "model-container.log"),
+            maxBytes: DiagnosticsLogLimits.compactMaxBytes
+        )
+        store.prepareForAppend(resetIfOversized: true)
+        return store
+    }()
+
+    static func makeSharedContainer(isStoredInMemoryOnly: Bool = false) -> ModelContainer {
         let schema = Schema([
             Item.self,
         ])
@@ -21,7 +33,7 @@ private enum ModelContainerBootstrap {
         do {
             return try ModelContainer(
                 for: schema,
-                configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)]
+                configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: isStoredInMemoryOnly)]
             )
         } catch {
             appendLog("persistent-store 初始化失敗，改用 in-memory fallback：\(error.localizedDescription)")
@@ -39,36 +51,36 @@ private enum ModelContainerBootstrap {
     }
 
     private static func appendLog(_ message: String) {
-        let line = "[\(ISO8601DateFormatter().string(from: Date()))] \(message)\n"
-        guard let data = line.data(using: .utf8) else { return }
+        logStore.appendLine("[\(ISO8601DateFormatter().string(from: Date()))] \(message)")
+    }
+}
 
-        if FileManager.default.fileExists(atPath: logURL.path),
-           let handle = try? FileHandle(forWritingTo: logURL) {
-            do {
-                try handle.seekToEnd()
-                try handle.write(contentsOf: data)
-                try handle.close()
-            } catch {
-                try? data.write(to: logURL, options: .atomic)
-            }
-            return
-        }
-
-        try? data.write(to: logURL, options: .atomic)
+private struct TestHostPlaceholderView: View {
+    var body: some View {
+        Color.clear
+            .frame(minWidth: 1, minHeight: 1)
     }
 }
 
 @main
 struct O_PaperclipApp: App {
     init() {
-        AppDiagnostics.shared.setupIfNeeded()
+        if !AppRuntimeEnvironment.isRunningTests {
+            AppDiagnostics.shared.setupIfNeeded()
+        }
     }
 
-    var sharedModelContainer: ModelContainer = ModelContainerBootstrap.makeSharedContainer()
+    var sharedModelContainer: ModelContainer = ModelContainerBootstrap.makeSharedContainer(
+        isStoredInMemoryOnly: AppRuntimeEnvironment.isRunningTests
+    )
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            if AppRuntimeEnvironment.isRunningTests {
+                TestHostPlaceholderView()
+            } else {
+                ContentView()
+            }
         }
         .modelContainer(sharedModelContainer)
     }

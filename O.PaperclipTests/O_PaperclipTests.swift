@@ -6,6 +6,7 @@ import Testing
 
 private final class MockDeviceManager: DeviceControlling {
     let objectWillChange = ObservableObjectPublisher()
+    let debugLogSubject = CurrentValueSubject<[String], Never>([])
 
     var connectionState: DeviceConnectionState = .disconnected
     var logEntries: [String] { debugLog }
@@ -13,6 +14,7 @@ private final class MockDeviceManager: DeviceControlling {
     var connectionNotice: String?
     var sentCoordinates: [CLLocationCoordinate2D] = []
     var debugLog: [String] = []
+    var debugLogPublisher: AnyPublisher<[String], Never> { debugLogSubject.eraseToAnyPublisher() }
     var isConnected: Bool = false
     var isConnecting: Bool = false
     var connectionStage: String = ""
@@ -49,6 +51,15 @@ private final class MockDeviceManager: DeviceControlling {
     func sendLocationToDeviceAsync(latitude: Double, longitude: Double) async throws {}
     func clearSimulatedLocationAsync() async throws {
         clearSimulatedLocationCallCount += 1
+    }
+
+    func publishDebugLog(_ line: String) {
+        debugLog.append(line)
+        debugLogSubject.send(debugLog)
+    }
+
+    func publishStateChange() {
+        objectWillChange.send()
     }
 }
 
@@ -117,35 +128,6 @@ struct O_PaperclipTests {
         let identifiers = RemoteBrowseOutputParser.identifiers(in: raw)
 
         #expect(identifiers == ["DUPLICATED-DEVICE"])
-    }
-
-    @Test func parsesIOSUSBIdentifiersFromIORegOutput() throws {
-        let raw = """
-        +-o USB2 Hub@02100000  <class IOUSBHostDevice, id 0x100000a36, registered>
-          {
-            "kUSBSerialNumberString" = "7423J07"
-            "USB Product Name" = "USB2 Hub"
-          }
-        +-o iPhone@03100000  <class IOUSBHostDevice, id 0x10019324e, registered>
-          {
-            "kUSBSerialNumberString" = "00008150001220E23C84401C"
-            "USB Product Name" = "iPhone"
-            "SupportsIPhoneOS" = Yes
-          }
-        +-o iPad@04100000  <class IOUSBHostDevice, id 0x10019324f, registered>
-          {
-            "kUSBSerialNumberString" = "000081010000112233445566"
-            "kUSBProductString" = "iPad"
-            "SupportsIPhoneOS" = Yes
-          }
-        """
-
-        let identifiers = USBHardwareProbeParser.identifiers(in: raw)
-
-        #expect(identifiers == [
-            "00008150001220E23C84401C",
-            "000081010000112233445566"
-        ])
     }
 
     @Test func matchesDashedAndUndashedDeviceIdentifiers() {
@@ -458,6 +440,77 @@ struct O_PaperclipTests {
         #expect(backupText.contains("12345678901234567890"))
     }
 
+    @Test func runtimeLogStorePrepareForAppendRotatesOversizedLog() throws {
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let logURL = tempDir.appendingPathComponent("app-lifecycle.jsonl")
+        try String(repeating: "x", count: 80).write(to: logURL, atomically: true, encoding: .utf8)
+
+        let store = RotatingRuntimeLogStore(logURL: logURL, maxBytes: 32)
+        store.prepareForAppend(resetIfOversized: true)
+
+        let backupURL = tempDir.appendingPathComponent("app-lifecycle.jsonl.1")
+        let currentSize = (try FileManager.default.attributesOfItem(atPath: logURL.path)[.size] as? NSNumber)?.intValue ?? -1
+
+        #expect(FileManager.default.fileExists(atPath: backupURL.path))
+        #expect(currentSize == 0)
+    }
+
+    @Test func legacyAppSupportMigratorMovesFilesAndRewritesStoredPaths() throws {
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let baseDir = tempDir.appendingPathComponent("Application Support")
+        let targetRoot = baseDir.appendingPathComponent("fregata-O-PaperclipPackaging", isDirectory: true)
+        let legacyRoot = baseDir.appendingPathComponent("O.Paperclip", isDirectory: true)
+        let sourceDirectory = legacyRoot.appendingPathComponent("SavedLocations", isDirectory: true)
+        let sourceFile = sourceDirectory.appendingPathComponent("home.json")
+        let logsDirectory = legacyRoot.appendingPathComponent("Logs", isDirectory: true)
+        let privilegedDirectory = legacyRoot.appendingPathComponent("PrivilegedTunnel", isDirectory: true)
+        let targetFile = targetRoot.appendingPathComponent("SavedLocations/home.json")
+        let suiteName = "LegacyAppSupportMigratorTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+
+        try FileManager.default.createDirectory(at: sourceDirectory, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: logsDirectory, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: privilegedDirectory, withIntermediateDirectories: true)
+        try "{\"title\":\"Home\"}".write(to: sourceFile, atomically: true, encoding: .utf8)
+        try "old log".write(to: logsDirectory.appendingPathComponent("device-runtime.log"), atomically: true, encoding: .utf8)
+        try "pid".write(to: privilegedDirectory.appendingPathComponent("opaperclip_tunnel.pid"), atomically: true, encoding: .utf8)
+        defaults.set([sourceFile.path], forKey: "saved-location-paths")
+
+        defer {
+            defaults.removePersistentDomain(forName: suiteName)
+            try? FileManager.default.removeItem(at: tempDir)
+        }
+
+        LegacyAppSupportMigrator.migrateIfNeeded(
+            targetRoot: targetRoot,
+            legacyRoots: [legacyRoot],
+            defaults: defaults
+        )
+
+        let storedPaths = defaults.array(forKey: "saved-location-paths") as? [String] ?? []
+        let markerURL = targetRoot.appendingPathComponent("maintenance-migration-v1.json")
+
+        #expect(FileManager.default.fileExists(atPath: targetFile.path))
+        #expect(storedPaths == [targetFile.path])
+        #expect(!FileManager.default.fileExists(atPath: logsDirectory.path))
+        #expect(!FileManager.default.fileExists(atPath: privilegedDirectory.path))
+        #expect(FileManager.default.fileExists(atPath: markerURL.path))
+    }
+
+    @Test func dvtStreamLogReducerSuppressesPerAckNoise() {
+        var reducer = DVTStreamLogReducer()
+
+        #expect(reducer.consume(line: "OK 1", ackLogInterval: 2).isEmpty)
+        #expect(
+            reducer.consume(line: "OK 2", ackLogInterval: 2) ==
+            ["dvt-stream 已確認 2 筆定位更新（last seq: 2）"]
+        )
+        #expect(reducer.consume(line: "READY") == ["dvt-stream 已就緒"])
+    }
+
     @Test func remoteBrowseParserReadsIdentifiersFromJSON() {
         let raw = """
         [
@@ -509,6 +562,58 @@ struct O_PaperclipTests {
 
         #expect(vm.appState == .selectingB)
         #expect(vm.locationInputError == "A 到 B 路線計算失敗，請調整起點或終點後再試。")
+    }
+
+    @MainActor
+    @Test func debugLogPublisherDoesNotTriggerDependencyBridge() {
+        let deviceManager = MockDeviceManager()
+        let vm = AppViewModel(
+            deviceManager: deviceManager,
+            locationSearchService: MockLocationSearchService(),
+            routeCalculator: MockRouteCalculator { _, _ in }
+        )
+
+        deviceManager.publishDebugLog("line 1")
+        RunLoop.main.run(until: Date().addingTimeInterval(0.02))
+        #expect(vm.dependencyVersion == 0)
+
+        deviceManager.publishStateChange()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.02))
+        #expect(vm.dependencyVersion == 1)
+    }
+
+    @Test func unexpectedDvtExitRebuildsStreamBeforeFullReconnect() throws {
+        let stream = MockDVTLocationStream()
+        let deviceManager = DeviceManager(dvtStream: stream, shouldPrewarmCLI: false)
+
+        deviceManager.debugConfigureConnectedDvtStateForTests()
+        deviceManager.startContinuousLocationStream()
+        #expect(deviceManager.debugAwaitQueuesForTests())
+        #expect(stream.startCallCount == 1)
+
+        stream.simulateUnexpectedExit(15)
+        #expect(deviceManager.debugAwaitQueuesForTests(timeout: 2.0))
+
+        #expect(stream.startCallCount == 2)
+        #expect(deviceManager.debugHasAutoReconnectScheduledForTests == false)
+        #expect(deviceManager.isConnected)
+    }
+
+    @Test func failedDvtRebuildFallsBackToFullReconnect() throws {
+        let stream = MockDVTLocationStream()
+        let deviceManager = DeviceManager(dvtStream: stream, shouldPrewarmCLI: false)
+
+        deviceManager.debugConfigureConnectedDvtStateForTests()
+        deviceManager.startContinuousLocationStream()
+        #expect(deviceManager.debugAwaitQueuesForTests())
+        #expect(stream.startCallCount == 1)
+
+        stream.shouldThrowOnStart = true
+        stream.simulateUnexpectedExit(15)
+        #expect(deviceManager.debugAwaitQueuesForTests(timeout: 2.0))
+
+        #expect(deviceManager.debugHasAutoReconnectScheduledForTests)
+        #expect(stream.startCallCount == 1)
     }
 
     @MainActor

@@ -1,9 +1,11 @@
+import Combine
 import SwiftUI
 
 struct DeviceStatusSectionView: View {
     @Bindable var vm: AppViewModel
     let isCompactSidebar: Bool
     @Binding var isWirelessMode: Bool
+    @State private var debugLogLines: [String] = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -72,15 +74,23 @@ struct DeviceStatusSectionView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             }
 
-            if !vm.deviceManager.debugLog.isEmpty && !vm.isActiveSimulationRunning {
+            if !debugLogLines.isEmpty && !vm.isActiveSimulationRunning {
                 debugLogPanel
             }
 
         }
+        .onAppear {
+            if debugLogLines != vm.deviceManager.debugLog {
+                debugLogLines = vm.deviceManager.debugLog
+            }
+        }
+        .onReceive(vm.deviceManager.debugLogPublisher.receive(on: RunLoop.main)) { lines in
+            debugLogLines = lines
+        }
     }
 
     private var debugLogPanel: some View {
-        let recentLines = Array(vm.deviceManager.debugLog.suffix(isCompactSidebar ? 5 : 8))
+        let recentLines = Array(debugLogLines.suffix(isCompactSidebar ? 5 : 8))
 
         return ScrollView {
             LazyVStack(alignment: .leading, spacing: 2) {

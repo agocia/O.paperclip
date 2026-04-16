@@ -204,6 +204,14 @@ Yes. Switching to `Wi-Fi` disconnects the active USB session and rebuilds the co
 
 Try clearing the location again, or restart location services on the device.
 
+## Diagnostics and Maintenance
+
+- Runtime logs now live under `~/Library/Application Support/fregata-O-PaperclipPackaging/Logs/`.
+- Long-running sessions use bounded log rotation, including lifecycle, incident, model bootstrap, and privileged tunnel logs.
+- Older Application Support roots (`O.Paperclip`, `O-Paperclip`) are migrated into the current root on launch, while only regenerable tunnel and log artifacts are cleaned.
+- DMG build artifacts are written to `build/dmg/artifacts/` instead of the repository root.
+- The maintenance runbook is documented in [docs/maintenance.md](docs/maintenance.md).
+
 ## Development
 
 ### Build
@@ -217,6 +225,11 @@ xcodebuild -project O.Paperclip.xcodeproj -scheme O.Paperclip -configuration Deb
 ```bash
 xcodebuild -project O.Paperclip.xcodeproj -scheme O.Paperclip test
 ```
+
+Shared scheme notes:
+
+- The shared `O.Paperclip` scheme runs `O.PaperclipTests` only. The stock template UI tests are not part of the shared test action.
+- When XCTest launches the host app, O.Paperclip uses a minimal placeholder scene and an in-memory model container so the logic test bundle does not depend on the full map UI at startup.
 
 ## Project Structure
 

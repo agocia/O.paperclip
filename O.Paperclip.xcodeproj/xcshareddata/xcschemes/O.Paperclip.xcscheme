@@ -41,17 +41,6 @@
                ReferencedContainer = "container:O.Paperclip.xcodeproj">
             </BuildableReference>
          </TestableReference>
-         <TestableReference
-            skipped = "NO"
-            parallelizable = "YES">
-            <BuildableReference
-               BuildableIdentifier = "primary"
-               BlueprintIdentifier = "CA9AF8672F5539E400AC05E8"
-               BuildableName = "O.PaperclipUITests.xctest"
-               BlueprintName = "O.PaperclipUITests"
-               ReferencedContainer = "container:O.Paperclip.xcodeproj">
-            </BuildableReference>
-         </TestableReference>
       </Testables>
    </TestAction>
    <LaunchAction

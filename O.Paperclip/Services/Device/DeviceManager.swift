@@ -55,84 +55,6 @@ private struct PreparedDeviceState {
     let simulateLocationMode: SimulateLocationMode
 }
 
-// USB 熱插拔監看改走 ioreg，避免長時間反覆叫 pymobiledevice3 usbmux list 造成逾時與卡死。
-enum USBHardwareProbeParser {
-    nonisolated static func identifiers(in raw: String) -> [String] {
-        struct DeviceBlock {
-            var serial: String?
-            var product: String?
-            var supportsIPhoneOS = false
-        }
-
-        var identifiers: [String] = []
-        var currentBlock: DeviceBlock?
-
-        func flushCurrentBlock() {
-            guard let currentBlock,
-                  let serial = currentBlock.serial?.trimmingCharacters(in: .whitespacesAndNewlines),
-                  !serial.isEmpty else {
-                return
-            }
-
-            let isMobileAppleDevice =
-                currentBlock.supportsIPhoneOS
-                || ["iphone", "ipad", "ipod"].contains(currentBlock.product?.lowercased() ?? "")
-
-            guard isMobileAppleDevice else { return }
-            identifiers.append(serial)
-        }
-
-        for line in raw.components(separatedBy: .newlines) {
-            if line.contains("<class IOUSBHostDevice"), line.contains("+-o ") {
-                flushCurrentBlock()
-                currentBlock = DeviceBlock(product: headerProductName(from: line))
-                continue
-            }
-
-            guard var block = currentBlock else { continue }
-            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-
-            if let serial = quotedValue(for: "kUSBSerialNumberString", in: trimmed) {
-                block.serial = serial
-            } else if let product = quotedValue(for: "USB Product Name", in: trimmed)
-                        ?? quotedValue(for: "kUSBProductString", in: trimmed) {
-                block.product = product
-            } else if trimmed.contains("\"SupportsIPhoneOS\" = Yes") {
-                block.supportsIPhoneOS = true
-            } else if trimmed == "}" {
-                currentBlock = block
-                flushCurrentBlock()
-                currentBlock = nil
-                continue
-            }
-
-            currentBlock = block
-        }
-
-        flushCurrentBlock()
-
-        var seen = Set<String>()
-        return identifiers.filter { seen.insert($0).inserted }
-    }
-
-    nonisolated private static func headerProductName(from line: String) -> String? {
-        guard let markerRange = line.range(of: "+-o ") else { return nil }
-        let suffix = line[markerRange.upperBound...]
-        guard let atIndex = suffix.firstIndex(of: "@") else { return nil }
-        let name = suffix[..<atIndex].trimmingCharacters(in: .whitespacesAndNewlines)
-        return name.isEmpty ? nil : name
-    }
-
-    nonisolated private static func quotedValue(for key: String, in line: String) -> String? {
-        let prefix = "\"\(key)\" = \""
-        guard let range = line.range(of: prefix) else { return nil }
-        let remainder = line[range.upperBound...]
-        guard let closingQuote = remainder.firstIndex(of: "\"") else { return nil }
-        let value = remainder[..<closingQuote].trimmingCharacters(in: .whitespacesAndNewlines)
-        return value.isEmpty ? nil : String(value)
-    }
-}
-
 private final class LockedStringBuffer: @unchecked Sendable {
     private let lock = NSLock()
     private var text = ""
@@ -354,46 +276,55 @@ enum DeviceLogRedactor {
     }
 }
 
-final class RotatingRuntimeLogStore: @unchecked Sendable {
-    let logURL: URL
-    let backupURL: URL
-    let maxBytes: UInt64
-    private let fileManager: FileManager
+struct DVTStreamLogReducer {
+    private(set) var pendingAcknowledgementCount = 0
+    private(set) var lastAcknowledgedSequence: Int?
 
-    init(logURL: URL, maxBytes: UInt64 = 256 * 1024, fileManager: FileManager = .default) {
-        self.logURL = logURL
-        self.backupURL = logURL.deletingLastPathComponent().appendingPathComponent(logURL.lastPathComponent + ".1")
-        self.maxBytes = maxBytes
-        self.fileManager = fileManager
+    mutating func consume(line rawLine: String, ackLogInterval: Int = AppConstants.DeviceStream.ackLogInterval) -> [String] {
+        let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !line.isEmpty else { return [] }
+
+        if line == "READY" {
+            return flushPendingAcknowledgements() + ["dvt-stream 已就緒"]
+        }
+
+        if line == "CLEARED" {
+            return flushPendingAcknowledgements() + ["dvt-stream 已清除模擬定位"]
+        }
+
+        if line.hasPrefix("OK") {
+            pendingAcknowledgementCount += 1
+            lastAcknowledgedSequence = parseSequence(from: line) ?? lastAcknowledgedSequence
+            guard pendingAcknowledgementCount >= max(1, ackLogInterval) else { return [] }
+            return flushPendingAcknowledgements()
+        }
+
+        return flushPendingAcknowledgements() + ["dvt-stream: \(line)"]
     }
 
-    func appendLine(_ line: String) {
-        guard let data = (line + "\n").data(using: .utf8) else { return }
-        rotateIfNeeded(incomingBytes: UInt64(data.count))
+    mutating func flushPendingAcknowledgements() -> [String] {
+        guard pendingAcknowledgementCount > 0 else { return [] }
 
-        if !fileManager.fileExists(atPath: logURL.path) {
-            fileManager.createFile(atPath: logURL.path, contents: data)
-            return
-        }
+        let count = pendingAcknowledgementCount
+        let sequence = lastAcknowledgedSequence
+        pendingAcknowledgementCount = 0
+        lastAcknowledgedSequence = nil
 
-        do {
-            let handle = try FileHandle(forWritingTo: logURL)
-            try handle.seekToEnd()
-            try handle.write(contentsOf: data)
-            try handle.close()
-        } catch {
-            try? (line + "\n").write(to: logURL, atomically: true, encoding: .utf8)
+        if let sequence {
+            return ["dvt-stream 已確認 \(count) 筆定位更新（last seq: \(sequence)）"]
         }
+        return ["dvt-stream 已確認 \(count) 筆定位更新"]
     }
 
-    private func rotateIfNeeded(incomingBytes: UInt64) {
-        let currentSize = (try? fileManager.attributesOfItem(atPath: logURL.path)[.size] as? NSNumber)?.uint64Value ?? 0
-        guard currentSize + incomingBytes > maxBytes else { return }
+    mutating func reset() {
+        pendingAcknowledgementCount = 0
+        lastAcknowledgedSequence = nil
+    }
 
-        try? fileManager.removeItem(at: backupURL)
-        if fileManager.fileExists(atPath: logURL.path) {
-            try? fileManager.moveItem(at: logURL, to: backupURL)
-        }
+    private func parseSequence(from line: String) -> Int? {
+        let parts = line.split(whereSeparator: \.isWhitespace)
+        guard parts.count >= 2 else { return nil }
+        return Int(parts[1])
     }
 }
 
@@ -625,7 +556,11 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
     @Published var isWirelessMode: Bool = false {
         didSet { UserDefaults.standard.set(isWirelessMode, forKey: Self.wirelessModeKey) }
     }
-    @Published private(set) var debugLog: [String] = []
+    private(set) var debugLog: [String] = []
+
+    var debugLogPublisher: AnyPublisher<[String], Never> {
+        debugLogSubject.eraseToAnyPublisher()
+    }
 
     var isConnected: Bool { connectionState.isConnected }
     var isConnecting: Bool { connectionState.isBusy }
@@ -659,11 +594,9 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
     private var isConnectionInFlight = false
     private let sendQueueSpecificKey = DispatchSpecificKey<String>()
     private let sendQueueSpecificValue = "paperclip.gps.sender"
-    private let connectionQueueSpecificKey = DispatchSpecificKey<String>()
-    private let connectionQueueSpecificValue = "paperclip.connection"
     private var inFlight = false
     private var pendingCoordinate: CLLocationCoordinate2D?
-    private let dvtStream = DVTLocationStream()
+    private let dvtStream: any DVTStreaming
 
     private var tunnelProcess: Process?
     private var tunnelOutPipe: Pipe?
@@ -675,9 +608,7 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
     private var userInitiatedDisconnect = false
     private var expectedDvtStreamExit = false
     private var sentLocationCount: Int = 0
-    private var connectionHealthTimer: DispatchSourceTimer?
-    private var currentConnectedDeviceKey: String?
-    private var healthMonitorMissingCount: Int = 0
+    private var isRecoveringDvtStream = false
     private var activeTunnelConnectionType: TunnelConnectionType?
     private var tunnelRequiresAdmin = false
     private var pendingConnectionDeviceKey: String?
@@ -687,7 +618,12 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
     private var cliPrewarmStarted = false
     private let privilegedTunnelFiles = PrivilegedTunnelFiles.makeDefault()
     private let runtimeLogStore = RotatingRuntimeLogStore(logURL: DiagnosticsPaths.logFileURL(named: "device-runtime.log"))
+    private lazy var privilegedTunnelLogStore = RotatingRuntimeLogStore(
+        logURL: privilegedTunnelFiles.logURL,
+        maxBytes: DiagnosticsLogLimits.defaultMaxBytes
+    )
     private let runtimeLogQueue = DispatchQueue(label: "paperclip.runtime.log", qos: .utility)
+    private let debugLogSubject = CurrentValueSubject<[String], Never>([])
     private static let manualRsdHostKey = "paperclip.connection.manualRsdHost"
     private static let manualRsdPortKey = "paperclip.connection.manualRsdPort"
     private static let tunnelUDIDKey = "paperclip.connection.tunnelUDID"
@@ -699,21 +635,27 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
         f.dateFormat = "HH:mm:ss"
         return f
     }()
+    private var dvtLogReducer = DVTStreamLogReducer()
 
-    init() {
+    init(
+        dvtStream: any DVTStreaming = DVTLocationStream(),
+        shouldPrewarmCLI: Bool = true
+    ) {
+        self.dvtStream = dvtStream
         sendQueue.setSpecific(key: sendQueueSpecificKey, value: sendQueueSpecificValue)
-        connectionQueue.setSpecific(key: connectionQueueSpecificKey, value: connectionQueueSpecificValue)
         let defaults = UserDefaults.standard
         manualRsdHost = defaults.string(forKey: Self.manualRsdHostKey) ?? ""
         manualRsdPort = defaults.string(forKey: Self.manualRsdPortKey) ?? ""
         tunnelUDID = defaults.string(forKey: Self.tunnelUDIDKey) ?? ""
         isWirelessMode = defaults.bool(forKey: Self.wirelessModeKey)
-        startCLIPrewarmIfNeeded()
+        runtimeLogStore.prepareForAppend(resetIfOversized: true)
+        if shouldPrewarmCLI {
+            startCLIPrewarmIfNeeded()
+        }
     }
 
     deinit {
         cancelAutoReconnect()
-        stopConnectionHealthMonitor(clearTrackedDevice: true)
         stopTunnel()
     }
 
@@ -741,7 +683,6 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
 
     private func connectDeviceInternal(autoTriggered: Bool, force: Bool) {
         guard force || !isConnected else { return }
-        stopConnectionHealthMonitor(clearTrackedDevice: false)
         if !autoTriggered {
             cancelAutoReconnect()
             setConnectionNotice(nil)
@@ -804,11 +745,9 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
                     ])
                 }
                 let deviceLabel = self.connectedDeviceLabel(using: cmd)
-                let connectedDeviceKey = self.resolveCurrentConnectedDeviceKey(using: cmd)
 
                 self.setConnectionState(.connected, deviceName: "\(deviceLabel) (RSD: \(ep.host):\(ep.port))", lastError: nil)
                 self.setConnectionNotice(nil)
-                self.startConnectionHealthMonitor(deviceKey: connectedDeviceKey)
 #if DEBUG
                 print("✅ Tunnel OK: \(DeviceLogRedactor.maskedEndpoint(host: ep.host, port: ep.port))")
 #endif
@@ -1136,93 +1075,6 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
         return (try? resolveConnectedDeviceLabel(using: cmd, preferredUDID: effectiveTunnelUDID)) ?? "Apple Device"
     }
 
-    private func resolveCurrentConnectedDeviceKey(using cmd: [String]) -> String? {
-        guard effectiveTunnelConnectionType == .usb else {
-            currentConnectedDeviceKey = nil
-            return nil
-        }
-
-        let deviceKey =
-            pendingConnectionDeviceKey ??
-            effectiveTunnelUDID ??
-            (try? preferredActiveDeviceUDID(using: cmd))
-
-        currentConnectedDeviceKey = deviceKey
-        return deviceKey
-    }
-
-    private func startConnectionHealthMonitor(deviceKey: String?) {
-        stopConnectionHealthMonitor(clearTrackedDevice: false)
-
-        guard effectiveTunnelConnectionType == .usb,
-              let deviceKey,
-              !deviceKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            currentConnectedDeviceKey = nil
-            return
-        }
-
-        healthMonitorMissingCount = 0
-        currentConnectedDeviceKey = deviceKey
-
-        let timer = DispatchSource.makeTimerSource(queue: connectionQueue)
-        timer.schedule(
-            deadline: .now() + AppConstants.DeviceStream.healthCheckInterval,
-            repeating: AppConstants.DeviceStream.healthCheckInterval
-        )
-        timer.setEventHandler { [weak self] in
-            self?.performConnectionHealthCheck(deviceKey: deviceKey)
-        }
-        connectionHealthTimer = timer
-        timer.resume()
-        appendLog("已啟動 USB 熱插拔監看（IOKit）")
-    }
-
-    private func stopConnectionHealthMonitor(clearTrackedDevice: Bool) {
-        connectionHealthTimer?.setEventHandler {}
-        connectionHealthTimer?.cancel()
-        connectionHealthTimer = nil
-        healthMonitorMissingCount = 0
-        if clearTrackedDevice {
-            currentConnectedDeviceKey = nil
-        }
-    }
-
-    private func performConnectionHealthCheck(deviceKey: String) {
-        guard !userInitiatedDisconnect else { return }
-        guard autoReconnectWorkItem == nil else { return }
-        guard !isConnectionInFlight else { return }
-        guard connectionState.isConnected else { return }
-        guard currentConnectedDeviceKey == deviceKey else { return }
-        guard effectiveTunnelConnectionType == .usb else { return }
-
-        do {
-            let identifiers = try listConnectedDeviceKeysForHealthMonitor()
-            let isStillConnected = identifiers.contains { DeviceIdentifierNormalizer.matches($0, deviceKey) }
-            if isStillConnected {
-                healthMonitorMissingCount = 0
-                return
-            }
-
-            healthMonitorMissingCount += 1
-            appendLog("USB 連線監看未找到目前裝置（\(healthMonitorMissingCount)/\(AppConstants.DeviceStream.healthCheckMissingThreshold)）")
-
-            if healthMonitorMissingCount >= AppConstants.DeviceStream.healthCheckMissingThreshold {
-                healthMonitorMissingCount = 0
-                handleConfirmedConnectionLoss(reason: "USB 裝置已拔除或中斷")
-            }
-        } catch {
-            appendLog("USB 連線監看暫時略過：\(error.localizedDescription)")
-        }
-    }
-
-    private func listConnectedDeviceKeysForHealthMonitor() throws -> [String] {
-        let raw = try runWithTimeout(
-            ["/usr/sbin/ioreg", "-p", "IOUSB", "-l", "-w0"],
-            timeout: AppConstants.DeviceStream.healthCheckTimeout
-        )
-        return USBHardwareProbeParser.identifiers(in: raw)
-    }
-
     private func startTunnelWithAdminPrompt(using cmd: [String], udid: String?) throws {
         var failures: [String] = []
         let candidates: [String?] = udid == nil ? [nil] : [udid, nil]
@@ -1343,12 +1195,12 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
         )
     }
 
-    private func cleanupPrivilegedTunnelArtifacts(removeScript: Bool = false) {
+    private func cleanupPrivilegedTunnelArtifacts(removeLog: Bool = false, removeScript: Bool = false) {
         let urls = [
-            privilegedTunnelFiles.logURL,
             privilegedTunnelFiles.pidURL,
             privilegedTunnelFiles.stopURL
-        ] + (removeScript ? [privilegedTunnelFiles.scriptURL] : [])
+        ] + (removeLog ? [privilegedTunnelFiles.logURL] : [])
+          + (removeScript ? [privilegedTunnelFiles.scriptURL] : [])
 
         for url in urls {
             try? FileManager.default.removeItem(at: url)
@@ -1357,22 +1209,31 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
 
     private func preparePrivilegedTunnelWrapperScript(for command: [String]) throws -> URL {
         ensurePrivilegedTunnelDirectory()
-        cleanupPrivilegedTunnelArtifacts(removeScript: false)
+        cleanupPrivilegedTunnelArtifacts(removeLog: true, removeScript: false)
         PrivilegedTunnelArtifactPreparer.prepareReadableArtifacts(files: privilegedTunnelFiles)
+        privilegedTunnelLogStore.prepareForAppend(resetIfOversized: true)
 
         let commandLine = command.map(shellEscape).joined(separator: " ")
+        let maxLogBytes = privilegedTunnelLogStore.maxBytes
         let script = """
         #!/bin/sh
         umask 077
         LOG=\(shellEscape(privilegedTunnelFiles.logURL.path))
         PIDFILE=\(shellEscape(privilegedTunnelFiles.pidURL.path))
         STOPFILE=\(shellEscape(privilegedTunnelFiles.stopURL.path))
+        MAX_LOG_BYTES=\(maxLogBytes)
         rm -f "$STOPFILE"
         : > "$LOG"
         \(commandLine) >> "$LOG" 2>&1 &
         CHILD=$!
         echo "$CHILD" > "$PIDFILE"
         while kill -0 "$CHILD" >/dev/null 2>&1; do
+          if [ -f "$LOG" ]; then
+            LOG_SIZE=$(stat -f%z "$LOG" 2>/dev/null || echo 0)
+            if [ "${LOG_SIZE:-0}" -gt "$MAX_LOG_BYTES" ]; then
+              tail -c "$MAX_LOG_BYTES" "$LOG" > "$LOG.trim" 2>/dev/null && mv "$LOG.trim" "$LOG"
+            fi
+          fi
           if [ -f "$STOPFILE" ]; then
             kill "$CHILD" >/dev/null 2>&1 || true
             break
@@ -1455,12 +1316,13 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
         } catch {
             appendLog("寫入 stop file 失敗：\(error.localizedDescription)")
         }
+
+        cleanupPrivilegedTunnelArtifacts(removeLog: false, removeScript: true)
     }
 
     func disconnect() {
         userInitiatedDisconnect = true
         cancelAutoReconnect()
-        stopConnectionHealthMonitor(clearTrackedDevice: true)
         setConnectionNotice(nil)
         clearSimulatedLocation()
         stopTunnel()
@@ -1810,7 +1672,9 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
             guard let self else { return }
             out.fileHandleForReading.readabilityHandler = nil
             err.fileHandleForReading.readabilityHandler = nil
-            self.handleUnexpectedConnectionLoss(reason: "tunnel 行程已結束（code: \(proc.terminationStatus)）")
+            if self.rsdEndpoint != nil && !self.userInitiatedDisconnect {
+                self.handleUnexpectedConnectionLoss(reason: "tunnel 行程已結束（code: \(proc.terminationStatus)）")
+            }
         }
 
         tunnelProcess = p
@@ -1860,11 +1724,10 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
         DispatchQueue.getSpecific(key: sendQueueSpecificKey) == sendQueueSpecificValue
     }
 
-    private func isOnConnectionQueue() -> Bool {
-        DispatchQueue.getSpecific(key: connectionQueueSpecificKey) == connectionQueueSpecificValue
-    }
-
     private func resetSendState() {
+        flushPendingDvtAcknowledgements()
+        dvtLogReducer.reset()
+        isRecoveringDvtStream = false
         expectedDvtStreamExit = true
         dvtStream.stop()
         pendingCoordinate = nil
@@ -1890,7 +1753,6 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
         simulateLocationMode = nil
         activeTunnelConnectionType = nil
         pendingConnectionDeviceKey = nil
-        stopConnectionHealthMonitor(clearTrackedDevice: false)
         stopSendPipelineSynchronously()
 
         tunnelOutPipe?.fileHandleForReading.readabilityHandler = nil
@@ -1915,16 +1777,6 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
     }
 
     private func handleUnexpectedConnectionLoss(reason: String) {
-        if isOnConnectionQueue() {
-            handleConfirmedConnectionLoss(reason: reason)
-            return
-        }
-        connectionQueue.async { [weak self] in
-            self?.handleConfirmedConnectionLoss(reason: reason)
-        }
-    }
-
-    private func handleConfirmedConnectionLoss(reason: String) {
         guard !userInitiatedDisconnect else { return }
         guard rsdEndpoint != nil || connectionState.isConnected else { return }
 
@@ -2018,14 +1870,19 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
         }
     }
 
+    private func publishDebugLogOnMain(_ line: String) {
+        debugLog.append(line)
+        if debugLog.count > 120 {
+            debugLog.removeFirst(debugLog.count - 120)
+        }
+        debugLogSubject.send(debugLog)
+    }
+
     private func appendLog(_ text: String) {
         let stamp = Self.logFormatter.string(from: Date())
         let line = "[\(stamp)] \(DeviceLogRedactor.sanitizedMessage(text))"
         DispatchQueue.main.async {
-            self.debugLog.append(line)
-            if self.debugLog.count > 120 {
-                self.debugLog.removeFirst(self.debugLog.count - 120)
-            }
+            self.publishDebugLogOnMain(line)
         }
         runtimeLogQueue.async { [runtimeLogStore] in
             runtimeLogStore.appendLine(line)
@@ -2098,15 +1955,20 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
         }
 
         expectedDvtStreamExit = false
+        dvtLogReducer.reset()
 
         try dvtStream.start(
             host: host,
             port: port,
             onOutput: { [weak self] text in
-                self?.appendLog("dvt-stream: \(self?.summarizeOutput(text, maxChars: 180) ?? text)")
+                self?.sendQueue.async { [weak self] in
+                    self?.handleDvtStreamOutput(text)
+                }
             },
             onError: { [weak self] text in
-                self?.appendLog("dvt-stream err: \(self?.summarizeOutput(text, maxChars: 180) ?? text)")
+                self?.sendQueue.async { [weak self] in
+                    self?.appendLog("dvt-stream err: \(self?.summarizeOutput(text, maxChars: 180) ?? text)")
+                }
             },
             onExit: { [weak self] status in
                 self?.handleDvtStreamExit(status)
@@ -2114,17 +1976,94 @@ final class DeviceManager: ObservableObject, DeviceControlling, @unchecked Senda
         )
     }
 
+    private func handleDvtStreamOutput(_ text: String) {
+        for message in dvtLogReducer.consume(line: text) {
+            appendLog(message)
+        }
+    }
+
+    private func flushPendingDvtAcknowledgements() {
+        for message in dvtLogReducer.flushPendingAcknowledgements() {
+            appendLog(message)
+        }
+    }
+
     private func handleDvtStreamExit(_ status: Int32) {
         sendQueue.async { [weak self] in
             guard let self else { return }
-            self.appendLog("dvt-stream exited: \(status)")
-            if self.expectedDvtStreamExit {
-                self.expectedDvtStreamExit = false
+            self.flushPendingDvtAcknowledgements()
+            let expectedExit = self.expectedDvtStreamExit
+            self.expectedDvtStreamExit = false
+            self.dvtLogReducer.reset()
+            guard !expectedExit else { return }
+
+            guard let ep = self.rsdEndpoint,
+                  self.simulateLocationMode == .dvt,
+                  self.connectionState.isConnected else {
+                self.appendLog("dvt-stream 非預期結束（code: \(status)）")
+                self.handleUnexpectedConnectionLoss(reason: "定位串流已中斷（code: \(status)）")
                 return
             }
-            self.handleUnexpectedConnectionLoss(reason: "定位串流已中斷（code: \(status)）")
+
+            if self.isRecoveringDvtStream {
+                self.appendLog("dvt-stream 非預期結束（code: \(status)），前一次重建仍在進行，改走完整重連")
+                self.handleUnexpectedConnectionLoss(reason: "定位串流重建重疊（code: \(status)）")
+                return
+            }
+
+            self.isRecoveringDvtStream = true
+            defer { self.isRecoveringDvtStream = false }
+
+            self.appendLog("dvt-stream 非預期結束（code: \(status)），嘗試在既有 tunnel 上重建")
+            do {
+                try self.startDvtStreamIfNeeded(host: ep.host, port: ep.port)
+                self.appendLog("dvt-stream 已重建，維持原有連線")
+            } catch {
+                self.appendLog("dvt-stream 重建失敗：\(error.localizedDescription)")
+                self.handleUnexpectedConnectionLoss(reason: "定位串流重建失敗：\(error.localizedDescription)")
+            }
         }
     }
+
+#if DEBUG
+    func debugConfigureConnectedDvtStateForTests(host: String = "127.0.0.1", port: String = "12345") {
+        rsdEndpoint = Endpoint(host: host, port: port)
+        simulateLocationMode = .dvt
+        connectionState = .connected
+        deviceName = "測試裝置"
+        lastError = nil
+        connectionNotice = nil
+        userInitiatedDisconnect = false
+        expectedDvtStreamExit = false
+        isRecoveringDvtStream = false
+    }
+
+    func debugAwaitQueuesForTests(timeout: TimeInterval = 1.0) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+
+        func waitOnePass() -> Bool {
+            let remaining = deadline.timeIntervalSinceNow
+            guard remaining > 0 else { return false }
+
+            let group = DispatchGroup()
+            group.enter()
+            sendQueue.async {
+                group.leave()
+            }
+            group.enter()
+            connectionQueue.async {
+                group.leave()
+            }
+            return group.wait(timeout: .now() + remaining) == .success
+        }
+
+        return waitOnePass() && waitOnePass()
+    }
+
+    var debugHasAutoReconnectScheduledForTests: Bool {
+        autoReconnectWorkItem != nil
+    }
+#endif
 
     private func run(_ args: [String]) throws -> String {
         try runProcess(args, timeout: nil)

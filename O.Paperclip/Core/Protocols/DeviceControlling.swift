@@ -9,6 +9,7 @@ protocol DeviceControlling: AnyObject {
     var connectionNotice: String? { get }
 
     var debugLog: [String] { get }
+    var debugLogPublisher: AnyPublisher<[String], Never> { get }
     var isConnected: Bool { get }
     var isConnecting: Bool { get }
     var connectionStage: String { get }
@@ -36,6 +37,9 @@ protocol DeviceControlling: AnyObject {
 
 extension DeviceControlling {
     var logEntries: [String] { debugLog }
+    var debugLogPublisher: AnyPublisher<[String], Never> {
+        Just(debugLog).eraseToAnyPublisher()
+    }
     var lastSentCoordinate: CLLocationCoordinate2D? { nil }
     var connectionNotice: String? { nil }
 

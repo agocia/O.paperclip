@@ -123,6 +123,9 @@ final class DVTLocationStream: DVTStreaming, @unchecked Sendable {
     }
 
     func stop() {
+        if let p = process {
+            p.terminationHandler = nil
+        }
         try? writeCommand("QUIT\n", required: false)
 
         if let p = process, p.isRunning {
